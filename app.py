@@ -1133,13 +1133,23 @@ class _AvmPaywallProvider:
                 "walletconnect$|wc@2:|WALLETCONNECT_DEEPLINK_CHOICE)/;[localStorage,sessionStorage]"
                 ".forEach(function(s){Object.keys(s).forEach(function(k){if(rx.test(k))s.removeItem(k)})})"
                 "}catch(e){}})();</script>")
+    # Default the wallet picker to Pera (most common Algorand wallet) so the Connect button is
+    # live immediately; Defly and Lute stay in the list. Never overrides a choice already made.
+    _DEFAULT_WALLET_JS = ("<script>(function(){var n=0,t=setInterval(function(){try{"
+                "var s=document.querySelector('select.input');"
+                "if(s){var o=s.querySelector('option[value=pera]');"
+                "if(o&&o.textContent.indexOf('recommended')<0)o.textContent='Pera (recommended)';"
+                "if(!s.value&&o){Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(s,'pera');"
+                "s.dispatchEvent(new Event('change',{bubbles:true}));}"
+                "if(s.value){clearInterval(t);return}}"
+                "}catch(e){}if(++n>40)clearInterval(t)},250)})();</script>")
     _HINT_JS = ("<script>window.addEventListener('load',function(){setTimeout(function(){try{"
                 "var c=document.querySelector('.container')||document.body;if(document.getElementById('aw-hint'))return;"
                 "var d=document.createElement('div');d.id='aw-hint';"
                 "d.style.cssText='max-width:560px;margin:18px auto 0;padding:14px 16px;border-radius:10px;"
                 "background:#f3f6ff;color:#1f2a44;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;text-align:left';"
                 "d.innerHTML='<b>How paying works</b><br>"
-                "<b>On a computer:</b> click Connect wallet, choose Pera or Defly, then scan the QR code with the wallet app on your phone.<br>"
+                "<b>On a computer:</b> click Connect wallet (Pera is preselected; Defly and Lute are in the list), then scan the QR code with the wallet app on your phone.<br>"
                 "<b>On a phone:</b> tap Connect wallet and approve in your wallet app, then come back to this tab.<br>"
                 "You are only charged if the agent delivers. The answer appears on this page, usually within 5 to 30 seconds.<br>Your wallet app will say <i>Transaction processing</i> after you sign. That is normal - tap Done and return here for your confirmation and answer.';"
                 "c.appendChild(d)}catch(e){}},600)});</script>")
@@ -1172,7 +1182,7 @@ class _AvmPaywallProvider:
         if template.count(_wait) == 1:
             template = template.replace(_wait, "Payment sent. Your agent is working on it - this usually takes 5 to 30 seconds. Keep this tab open.")
         template = template.replace("<head>", "<head>" + self._BOOT_JS, 1)
-        template = template.replace("</body>", self._HINT_JS + "</body>", 1)
+        template = template.replace("</body>", self._HINT_JS + self._DEFAULT_WALLET_JS + "</body>", 1)
         amount = 0.0
         try:
             first = (payment_required.accepts or [None])[0]
