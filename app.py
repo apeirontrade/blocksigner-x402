@@ -1020,8 +1020,35 @@ class _AvmPaywallProvider:
     the package's own AVM template (Pera/Defly/WalletConnect) with the same
     window.x402 injection the SDK performs."""
 
+    # The SDK's pay page builds the payment header with btoa(JSON.stringify(payload)).
+    # btoa() throws "The string contains invalid characters" for anything outside
+    # Latin-1, and the payload echoes our route description (em dashes, arrows...), so
+    # EVERY human paying in a browser failed after signing, before the payment was sent.
+    # The server decodes the header as UTF-8, so the correct client encoding is UTF-8.
+    _ENCODE_OLD = "btoa(JSON.stringify(Y))"
+    _ENCODE_NEW = "btoa(unescape(encodeURIComponent(JSON.stringify(Y))))"
+    _TRANSLIT = {"\u2014": "-", "\u2013": "-", "\u2192": "->", "\u00b7": "|", "\u2026": "...",
+                 "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'}
+
+    @classmethod
+    def _latin1_safe(cls, o):
+        """Fallback only: make every string safe for a bare btoa()."""
+        if isinstance(o, str):
+            for k, v in cls._TRANSLIT.items():
+                o = o.replace(k, v)
+            return o.encode("ascii", "ignore").decode("ascii")
+        if isinstance(o, dict):
+            return {k: cls._latin1_safe(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [cls._latin1_safe(v) for v in o]
+        return o
+
     def generate_html(self, payment_required, config):
         from x402.http.paywall.avm_paywall_template import AVM_PAYWALL_TEMPLATE
+        template = AVM_PAYWALL_TEMPLATE
+        encode_patched = template.count(self._ENCODE_OLD) == 1
+        if encode_patched:
+            template = template.replace(self._ENCODE_OLD, self._ENCODE_NEW)
         amount = 0.0
         try:
             first = (payment_required.accepts or [None])[0]
@@ -1051,9 +1078,13 @@ class _AvmPaywallProvider:
             "displayAmount": amount,
             "currentUrl": cur,
         }
+        if not encode_patched:
+            # SDK changed under us: the JS patch did not apply, so strip the payload
+            # down to characters a bare btoa() can take rather than fail the customer.
+            cfg = self._latin1_safe(cfg)
         blob = json.dumps(cfg).replace("</", "<\\/")
         script = "<script>\n    window.x402 = %s;\n</script>" % blob
-        return AVM_PAYWALL_TEMPLATE.replace("</body>", script + "</body>", 1)
+        return template.replace("</body>", script + "</body>", 1)
 
 payment_middleware(app, routes=routes, server=server,
                    paywall_config=_PaywallConfig(

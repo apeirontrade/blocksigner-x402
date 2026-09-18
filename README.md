@@ -50,9 +50,9 @@ defaults it applied. Explicitly bad values are still rejected before settlement.
 - `/x402.json`, `/.well-known/x402`, `/openapi.json`, `/llms.txt`,
   `/.well-known/agent-card.json`, `/sitemap.xml`, RSS for episodes
 
-## Two fixes worth knowing about
+## Three fixes worth knowing about
 
-Both were found while getting this live and may save other builders time.
+All three were found while getting this live and may save other builders time.
 
 **1. `x402-avm` 2.0.2 drops `PaymentOption.extra`.** The challenge tag set on a
 route never reached the payment requirements. `TaggedAvmScheme` subclasses
@@ -66,6 +66,18 @@ Node clients echo those back; some payers send none, and those settlements were
 never cataloged. `ChallengeFacilitatorClient._patched_payload` injects the
 resource block and the server's declared extensions into verify and settle calls
 when the client omitted them, preserving anything the client did send.
+
+**3. The SDK's browser pay page cannot send a payment if your description has a non-Latin-1 character.**
+After the wallet signs, the AVM paywall template builds the header with
+`btoa(JSON.stringify(payload))`. `btoa` throws *"The string contains invalid
+characters"* on anything outside Latin-1, and the payload echoes the route
+description — so one em dash means every human payer fails after signing and
+before the payment is sent. The server decodes that header as UTF-8, so the
+correct client encoding is `btoa(unescape(encodeURIComponent(...)))`.
+`_AvmPaywallProvider` patches the template at render time, and falls back to
+transliterating the payload if a future SDK release moves that line.
+`tests/paywall_audit.py` loads every paid route in real Chromium and runs the
+encode step, so this cannot regress silently.
 
 ## Run it
 
