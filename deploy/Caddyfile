@@ -1,0 +1,64 @@
+blocksigner.org {
+	encode gzip
+	log {
+		output stderr
+		format json
+	}
+	# ---- x402 app (Flask :8402)
+	handle /commission/* {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /commission {
+		rewrite * /
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /visit/* {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /x402 {
+		rewrite * /
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /x402.json {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /health {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /stats {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /llms.txt {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /robots.txt {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /sitemap.xml {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /47ec754113511231cfcae688db88c165.txt {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /.well-known/* {
+		reverse_proxy 127.0.0.1:8402
+	}
+	# ---- public read-only Control Room (:8089) — write routes blocked
+	handle /api/say {
+		respond "this public view is read-only" 403
+	}
+	handle /api/toggle {
+		respond "this public view is read-only" 403
+	}
+	handle {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header X-Content-Type-Options "nosniff"
+		header X-Frame-Options "SAMEORIGIN"
+		header Referrer-Policy "strict-origin-when-cross-origin"
+		reverse_proxy 127.0.0.1:8089
+	}
+}
+
+www.blocksigner.org {
+	redir https://blocksigner.org{uri}
+}

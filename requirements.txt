@@ -1,0 +1,5 @@
+flask
+gunicorn
+python-dotenv
+requests
+x402-avm[extensions]==2.0.2
