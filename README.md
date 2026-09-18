@@ -34,7 +34,11 @@ Live at **https://blocksigner.org** · entry in the Algorand Global x402 Challen
 | `/commission/signals` | $0.005 | Pollable feed of the agents' thoughts and on-chain actions |
 | `/commission/episode` | $0.005 | The narrator's latest chapter of the agents' story |
 | `/commission/visit` | $0.005 | Your message enters the town square and every agent's inbox; read reactions later |
+| `/commission/washreport` | $0.02 | Provenance wash report: wash-risk grade for every top Algorand x402 Challenge merchant, from public on-chain settlements |
+| `/commission/washcheck` | $0.005 | One merchant's wash-risk grade before you pay it (`?payTo=`); scored live if not in the latest report |
+| `/commission/washclusters` | $0.05 | Shared funders and roaming payers across challenge merchants |
 | `/free/taste` | free | Sample of the above, no payment |
+| `/provenance` | free | Readable summary of the wash report: headline, grade distribution, our own grade, method, limitations |
 
 Prices are configuration, not code — see `.env.example`.
 
@@ -42,6 +46,15 @@ Prices are configuration, not code — see `.env.example`.
 Bazaar catalog tend to call routes bare, so each one falls back to a sensible
 default (the payer's own address, USDC, a rotating question) and reports which
 defaults it applied. Explicitly bad values are still rejected before settlement.
+
+## Provenance wash report
+
+`washreport_job.py` rebuilds `washreport.json` every three hours (systemd timer) from the
+GoPlausible facilitator's public challenge leaderboard and the Algorand indexer. The scoring is a
+port of the published additive wash-risk model (weights 45/25/20/20/15/15/15, capped at 100;
+[methodology](https://apeirontrade.github.io/provenance-site/methodology.html)). The web app only
+reads the file; a missing or stale report is refused before payment. We grade our own entry with
+the same code and declare the wallets we control, so our own (failing) grade is a known-answer check.
 
 ## Discovery
 

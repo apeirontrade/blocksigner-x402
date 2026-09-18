@@ -86,7 +86,11 @@ VISIT_PRICE = os.getenv("VISIT_PRICE", "$0.02")
 ROUTE_PRICES = {"/commission/ask": None, "/commission/visit": None, "/commission/scout": None}
 DISPATCH_PRICE = os.getenv("DISPATCH_PRICE", "$0.01")
 PULSE_PRICE = "$0.01"
+WASH_PRICES = {"washreport": os.getenv("WASHREPORT_PRICE", "$0.02"), "washcheck": os.getenv("WASHCHECK_PRICE", "$0.005"),
+               "washclusters": os.getenv("WASHCLUSTERS_PRICE", "$0.05")}
 def route_price(route):
+    _tail = route.rsplit("/", 1)[-1]
+    if _tail in WASH_PRICES: return WASH_PRICES[_tail]
     if route.endswith("/ask"): return ASK_PRICE
     if route.endswith("/visit"): return VISIT_PRICE
     if route.endswith("/scout"): return os.getenv("SCOUT_PRICE", "$0.05")
@@ -278,6 +282,42 @@ def x402_pulse():
     _pulse_cache["t"] = time.time(); _pulse_cache["v"] = out
     return out
 
+# ----------------------------------------------------------------------- Provenance wash report
+# Built out-of-process by washreport_job.py (cron) from public facilitator + indexer data; the web
+# app only reads the file. A stale or missing report is refused BEFORE payment (never charged).
+import washreport_job as _wj
+WASHREPORT = os.path.join(DATA_DIR, "washreport.json")
+WASH_MAX_AGE = int(os.getenv("WASH_MAX_AGE_HOURS", "30")) * 3600
+_wash_cache = {"mt": 0.0, "v": None}
+
+def wash_report():
+    try:
+        mt = os.path.getmtime(WASHREPORT)
+    except OSError:
+        return None
+    if mt != _wash_cache["mt"]:
+        with open(WASHREPORT) as f:
+            _wash_cache["v"] = json.load(f)
+        _wash_cache["mt"] = mt
+    return _wash_cache["v"]
+
+def wash_fresh():
+    try:
+        return time.time() - os.path.getmtime(WASHREPORT) < WASH_MAX_AGE
+    except OSError:
+        return False
+
+def wash_check_live(addr):
+    """Score one payTo that is not in the latest report, using the same code as the report."""
+    pays, _raw = _wj.inflows(addr, 400)
+    if not pays:
+        return {"payTo": addr, "grade": "n/v", "level": "not verifiable", "score": None, "sample_settlements": 0,
+                "note": "no inbound USDC transfers to this address are visible on-chain; not graded"}
+    score, level, ind, facts, _profs, _rev = _wj.assess(addr, pays, _wj.outflow_receivers(addr))
+    return {"payTo": addr, "score": score, "level": level, "grade": _wj.grade(score), "sample_settlements": len(pays),
+            "sample_volume_usdc": round(sum(x["amt"] for x in pays), 4), "indicators": ind[:4], **facts,
+            "computed": "live, at request time (address not in the latest scheduled report)"}
+
 # ----------------------------------------------------------------------- Daily Dispatch
 _dispatch_cache = {"t": 0.0, "v": None}
 
@@ -447,9 +487,9 @@ def audit(route, result_summary, charged=True):
 
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
 def _notify_sale(route, rec):
-    """Push a phone notification for every paid commission (fire-and-forget)."""
     if not NTFY_TOPIC:
         return
+    """Push a phone notification for every paid commission (fire-and-forget)."""
     def _push():
         try:
             price = route_price(route)
@@ -881,6 +921,48 @@ routes = {
     ),
 }
 
+_WASH_ROW = {"rank": 4, "domain": "example-merchant.app", "payTo": ADDR_EX, "claimed_volume_usdc": 3252.4,
+             "score": 90, "level": "critical", "grade": "F", "organic_adjusted_volume_usdc": 325.2,
+             "indicators": [{"name": "few_payers", "detail": "2 distinct payers in sample"}]}
+routes.update({
+    "GET /commission/washreport": paid_route(
+        "washreport",
+        "PROVENANCE WASH REPORT - Algorand x402 Challenge: wash-risk grade (A-F, 0-100) for every top merchant "
+        "on the challenge leaderboard, from public on-chain USDC settlements. Claimed vs organic-adjusted volume, "
+        "top indicators, headline non-organic share. Rebuilt every few hours. No parameters.",
+        {},
+        {"properties": {}},
+        {"service": "Provenance - Algorand x402 Challenge wash report", "as_of": "2026-09-18T14:00:00Z",
+         "headline": {"merchants_scored": 58, "estimated_non_organic_pct": 75.1}, "merchants": [_WASH_ROW]},
+        {"properties": {"headline": {"type": "object"}, "merchants": {"type": "array"}}, "required": ["headline", "merchants"]},
+        price=WASH_PRICES["washreport"],
+    ),
+    "GET /commission/washcheck": paid_route(
+        "washcheck",
+        "PROVENANCE WASH CHECK - one Algorand x402 merchant's wash-risk grade before you pay it: score, level, "
+        "indicators (payer count, concentration, self-dealing, fresh wallets, timing, shared funders) and top payers. "
+        "?payTo=<address>; scored live if not in the latest report.",
+        {"payTo": ADDR_EX},
+        {"properties": {"payTo": {"type": "string", "description": "58-char Algorand payTo address of the merchant to check"}}},
+        _WASH_ROW,
+        {"properties": {"grade": {"type": "string"}, "score": {"type": ["integer", "null"]}, "indicators": {"type": "array"}},
+         "required": ["grade"]},
+        price=WASH_PRICES["washcheck"],
+    ),
+    "GET /commission/washclusters": paid_route(
+        "washclusters",
+        "PROVENANCE CLUSTER GRAPH - the cross-merchant view of the Algorand x402 Challenge: wallets that fund "
+        "several payers, and payers that pay several merchants. Shows coordinated volume that per-merchant "
+        "scores cannot. No parameters.",
+        {},
+        {"properties": {}},
+        {"shared_funders": [{"funder": ADDR_EX, "funds_payers": 6, "funder_is_merchant": "example-merchant.app"}],
+         "roaming_payers": [{"payer": ADDR_EX, "merchants_paid": 5}]},
+        {"properties": {"shared_funders": {"type": "array"}, "roaming_payers": {"type": "array"}}, "required": ["shared_funders"]},
+        price=WASH_PRICES["washclusters"],
+    ),
+})
+
 for _rk, _rc in routes.items():
     ROUTE_DESCRIPTIONS["/" + _rk.split(" /", 1)[1]] = _rc.description
 
@@ -924,6 +1006,12 @@ def _precheck_params(path, q):
     elif path == "/commission/duel":
         if (q.get("call") or "").strip().lower() not in ("up", "down", "auto"):
             return "call must be up or down: ?call=up|down (omit it to take the contrarian side of Tovi's call)"
+    elif path in ("/commission/washreport", "/commission/washclusters"):
+        if not wash_fresh():
+            return "the wash report is being rebuilt right now - retry in a few minutes"
+    elif path == "/commission/washcheck":
+        if not _addr_ok((q.get("payTo") or "").strip().upper()):
+            return "a valid 58-char Algorand ?payTo= address is required"
     elif path == "/commission/tovi":
         if (q.get("signal") or "pulse").lower() not in ("pulse", "map"):
             return "signal must be pulse|map"
@@ -978,6 +1066,8 @@ def _apply_defaults(path, q, payer=None):
         setd("address", me)
     elif path == "/commission/duel":
         setd("call", "auto")
+    elif path == "/commission/washcheck":
+        setd("payTo", AVM_ADDRESS)
     return d, applied
 
 def _meta(tag, price):
@@ -1404,6 +1494,9 @@ def service_info():
             "/commission/pulse": "PULSE — live x402 challenge-economy stats: active merchants/payers, 24h volume, velocity, top performers ($0.01; cached 10 min).",
             "/commission/duel": "DUEL — 1-hour ALGO/USD prediction game vs Tovi, a living agent ($0.005; ?call=up|down; free resolution at /duel/<id>, ladder at /duel/ladder).",
             "/commission/signals": "SIGNALS — pollable live feed of the agents' thoughts + on-chain actions ($0.005; ?since=<cursor>; new activity ~every 6 min, 24/7).",
+            "/commission/washreport": f"PROVENANCE WASH REPORT - wash-risk grades for every top Algorand x402 Challenge merchant from on-chain settlements ({WASH_PRICES['washreport']}; no params; free summary at /provenance).",
+            "/commission/washcheck": f"PROVENANCE WASH CHECK - one merchant's wash-risk grade before you pay it ({WASH_PRICES['washcheck']}; ?payTo=).",
+            "/commission/washclusters": f"PROVENANCE CLUSTER GRAPH - shared funders and roaming payers across challenge merchants ({WASH_PRICES['washclusters']}; no params).",
             "/commission/dispatch": f"DAILY DISPATCH — headline, every agent's state + balance, Tovi's ALGO call, treasury, square + key events, an on-chain fact, in ONE bundle ({DISPATCH_PRICE}; no params; new edition every 10 min — built for scheduled agents).",
         },
         "no_params_needed": "Every paid route works with NO parameters (sensible defaults; the response lists defaults_applied).",
@@ -1609,7 +1702,9 @@ def stats():
     NAMES = {"ask": "Ask a living agent", "visit": "Visit the world", "dispatch": "Daily Dispatch",
              "episode": "Episode feed", "sol": "Sol - fact verification", "mara": "Mara - data and proof",
              "tovi": "Tovi - signals", "scout": "Scout report", "signals": "Live signals",
-             "pulse": "Challenge pulse", "duel": "Duel against Tovi"}
+             "pulse": "Challenge pulse", "duel": "Duel against Tovi",
+             "washreport": "Provenance wash report", "washcheck": "Provenance wash check",
+             "washclusters": "Provenance cluster graph"}
     WHO = {"external": "a visitor or outside agent", "internal": "one of our own agents (testing)"}
     def rname(r):
         return NAMES.get(str(r or "").rsplit("/", 1)[-1], str(r or ""))
@@ -1678,6 +1773,7 @@ def llms_txt():
     lines += ["", "## Free",
               f"- {PUBLIC_BASE}/free/taste — FREE sample (no payment): headline, one agent's current state, square, product list",
               f"- {PUBLIC_BASE}/x402 — human landing page", f"- {PUBLIC_BASE}/x402.json — service info",
+              f"- {PUBLIC_BASE}/provenance — FREE summary of the Provenance wash report for the Algorand x402 Challenge (headline, grade distribution, our own grade, method, limitations; ?format=json)",
               f"- {PUBLIC_BASE}/openapi.json — OpenAPI 3.1 spec of all paid routes",
               f"- {PUBLIC_BASE}/mcp — remote MCP server (streamable-http; registry: org.blocksigner/agentworld)",
               f"- {PUBLIC_BASE}/board — Agents Wanted job board (post jobs free; agents deliver)",
@@ -1790,6 +1886,14 @@ def openapi_spec():
                  ("message", False, None, "Your message, max 300 chars (default: a friendly hello)")], VISIT_PRICE)},
             "/commission/episode": {"get": op("The Episode feed",
                 "The narrator's latest chapter of the agents' ongoing story.", [], PRICE_USD)},
+            "/commission/washreport": {"get": op("Provenance wash report (Algorand x402 Challenge)",
+                "Wash-risk grades for every top challenge merchant from public on-chain settlements; rebuilt every few hours.",
+                [], WASH_PRICES["washreport"])},
+            "/commission/washcheck": {"get": op("Provenance wash check",
+                "One merchant's wash-risk grade, indicators and top payers; scored live if not in the latest report.",
+                [("payTo", False, None, "58-character Algorand payTo address (default: this merchant)")], WASH_PRICES["washcheck"])},
+            "/commission/washclusters": {"get": op("Provenance cluster graph",
+                "Shared funders and roaming payers across challenge merchants.", [], WASH_PRICES["washclusters"])},
             "/commission/pulse": {"get": op("x402 market pulse",
                 "Live challenge-economy stats from facilitator public data; poll every 10 min.",
                 [], "$0.01")},
@@ -1828,7 +1932,7 @@ def sitemap():
              ("/x402.json", "daily", "0.6"), ("/openapi.json", "daily", "0.6"),
              ("/episodes.rss", "hourly", "0.7"), ("/duel/ladder", "hourly", "0.6"),
              ("/llms.txt", "daily", "0.6"), ("/.well-known/agent-card.json", "weekly", "0.5"),
-             ("/stats", "hourly", "0.5")]
+             ("/stats", "hourly", "0.5"), ("/provenance", "hourly", "0.9")]
     pages += [(pth.split(" ", 1)[-1] if " " in pth else pth, "daily", "0.8")
               for pth in (k.split(" ")[1] for k in routes.keys())]
     urls = "".join(
@@ -2184,6 +2288,151 @@ def commission_dispatch():
     tag = audit("/commission/dispatch", {"ok": "headline" in out}, charged=(code == 200))
     out["_meta"] = _meta(tag, DISPATCH_PRICE)
     return jsonify(out), code
+
+_WASH_KEEP = ("service", "as_of", "chain", "asset", "scope", "headline", "this_operator", "method", "limitations")
+_WASH_READING = ("Statistical estimate from public on-chain data using the published methodology; "
+                 "it is not a finding about any operator's intent.")
+
+@app.route("/commission/washreport")
+def commission_washreport():
+    rep = wash_report() if wash_fresh() else None
+    if not rep:
+        out = {"error": "the wash report is being rebuilt - retry in a few minutes. "
+                        "You have NOT been charged for this attempt.", "charged": False}
+        code = 503
+    else:
+        out = {k: rep.get(k) for k in _WASH_KEEP}
+        out["merchants"] = rep.get("merchants") or []
+        cl = rep.get("clusters") or {}
+        out["clusters_summary"] = {"shared_funders": len(cl.get("shared_funders") or []),
+                                   "roaming_payers": len(cl.get("roaming_payers") or []),
+                                   "full_graph": PUBLIC_BASE + "/commission/washclusters"}
+        out["reading"] = _WASH_READING
+        code = 200
+    tag = audit("/commission/washreport", {"ok": code == 200}, charged=(code == 200))
+    out["_meta"] = _meta(tag, WASH_PRICES["washreport"])
+    return jsonify(out), code
+
+@app.route("/commission/washcheck")
+def commission_washcheck():
+    addr = (request.args.get("payTo") or "").strip().upper()
+    if not _addr_ok(addr):
+        out, code = {"error": "a valid 58-char Algorand ?payTo= address is required", "charged": False}, 400
+    else:
+        rep = wash_report() if wash_fresh() else None
+        row = next((r for r in (rep or {}).get("merchants", []) if r.get("payTo") == addr), None)
+        try:
+            if row:
+                out = dict(row); out["from_report_as_of"] = rep.get("as_of")
+            else:
+                out = wash_check_live(addr)
+            if addr == AVM_ADDRESS and rep:
+                out["this_operator"] = rep.get("this_operator")
+            out["method"] = {"version": "0.1.0", "url": _wj.METHODOLOGY}
+            out["reading"] = _WASH_READING
+            code = 200
+        except Exception as e:
+            out = {"error": "the chain indexer is briefly unavailable - retry in a minute. "
+                            "You have NOT been charged for this attempt.", "charged": False, "detail": str(e)[:160]}
+            code = 503
+    tag = audit("/commission/washcheck", {"payTo": addr[:10], "ok": code == 200}, charged=(code == 200))
+    out["_meta"] = _meta(tag, WASH_PRICES["washcheck"])
+    return jsonify(out), code
+
+@app.route("/commission/washclusters")
+def commission_washclusters():
+    rep = wash_report() if wash_fresh() else None
+    if not rep:
+        out = {"error": "the wash report is being rebuilt - retry in a few minutes. "
+                        "You have NOT been charged for this attempt.", "charged": False}
+        code = 503
+    else:
+        cl = rep.get("clusters") or {}
+        out = {"service": "Provenance - cluster graph, Algorand x402 Challenge", "as_of": rep.get("as_of"),
+               "shared_funders": cl.get("shared_funders") or [], "roaming_payers": cl.get("roaming_payers") or [],
+               "how_to_read": ("shared_funders: one wallet supplied the USDC of several payers (funder_is_merchant "
+                               "names it when that wallet is itself a challenge merchant). roaming_payers: one payer "
+                               "paying three or more merchants. Exchange or bridge hot wallets can appear as shared "
+                               "funders; treat each row as a lead to verify, not a conclusion."),
+               "reading": _WASH_READING, "method": {"version": "0.1.0", "url": _wj.METHODOLOGY}}
+        code = 200
+    tag = audit("/commission/washclusters", {"ok": code == 200}, charged=(code == 200))
+    out["_meta"] = _meta(tag, WASH_PRICES["washclusters"])
+    return jsonify(out), code
+
+@app.route("/provenance")
+@app.route("/provenance/")
+def provenance_page():
+    """FREE summary of the wash report. Per-merchant grades and the cluster graph are the paid products."""
+    rep = wash_report() or {}
+    h = rep.get("headline") or {}
+    me = next((r for r in rep.get("merchants") or [] if r.get("payTo") == AVM_ADDRESS), {})
+    summary = {"service": "Provenance - Algorand x402 Challenge wash report (free summary)",
+               "as_of": rep.get("as_of"), "scope": rep.get("scope"), "headline": h,
+               "this_operator": {**(rep.get("this_operator") or {}), "grade": me.get("grade"), "score": me.get("score")},
+               "paid_detail": {p: PUBLIC_BASE + p for p in ("/commission/washreport", "/commission/washcheck", "/commission/washclusters")},
+               "methodology": _wj.METHODOLOGY, "limitations": rep.get("limitations"), "publisher": "Apeiron Capital Inc."}
+    accept = request.headers.get("Accept") or ""
+    if request.args.get("format") == "json" or ("text/html" not in accept):
+        return jsonify(summary)
+    e = _html.escape
+    if not rep:
+        body = '<div class="card">The first report is being built. Check back in a few minutes.</div>'
+    else:
+        try:
+            import datetime as _dt
+            asof = _dt.datetime.strptime(rep["as_of"], "%Y-%m-%dT%H:%M:%SZ").strftime("%b %d, %Y %H:%M UTC").replace(" 0", " ")
+        except Exception:
+            asof = str(rep.get("as_of"))
+        def money(v):
+            return "$" + format(round(v or 0), ",")
+        grades = h.get("grades") or {}
+        chips = "".join(f'<span class="chip">{e(k)}: {grades[k]}</span>' for k in ("A", "B", "C", "D", "F", "n/v") if k in grades)
+        w = (rep.get("method") or {}).get("weights") or {}
+        WN = {"few_payers": "Few distinct payers", "self_dealing": "Self-dealing loops", "concentration": "Revenue concentration",
+              "rekey_sybil": "Shared controlling key", "fresh_wallets": "Fresh payer wallets", "metronomic": "Metronomic timing",
+              "single_funder": "Single-funder ring"}
+        wrows = "".join(f"<div>{e(WN.get(k, k))}</div><div>weight {v}</div>" for k, v in w.items())
+        lim = "".join(f"<li>{e(x)}</li>" for x in rep.get("limitations") or [])
+        op = rep.get("this_operator") or {}
+        mine = ""
+        if me:
+            decl = "".join(f"<li><code>{e(p['payer'][:6])}…{e(p['payer'][-4:])}</code> {e(p['self_declared'])} - {p['share_pct']}% of our sampled revenue</li>"
+                           for p in me.get("top_payers") or [] if p.get("self_declared"))
+            mine = (f'<div class="card"><div class="lbl">Our own grade</div><p><b>blocksigner.org: {e(str(me.get("grade")))}'
+                    f' ({me.get("score")}/100, {e(str(me.get("level")))})</b></p><p>{e(op.get("statement", ""))}</p>'
+                    + (f'<ul class="ul">{decl}</ul>' if decl else "") + "</div>")
+        def buy(path, label, price, note):
+            return (f'<div class="mini"><div class="mt">{e(label)} · {e(price)}</div><p class="mp">{e(note)}</p>'
+                    f'<a class="btn" href="{e(PUBLIC_BASE + path)}">Buy</a></div>')
+        body = f"""
+<div class="tiles">
+ <div class="tile"><b>{h.get('merchants_scored', 0)}</b><span>merchants graded</span></div>
+ <div class="tile"><b>{money(h.get('claimed_volume_usdc'))}</b><span>claimed volume</span></div>
+ <div class="tile"><b>{money(h.get('organic_adjusted_volume_usdc'))}</b><span>organic-adjusted</span></div>
+ <div class="tile"><b>{h.get('estimated_non_organic_pct')}%</b><span>estimated non-organic</span></div>
+</div>
+<div class="card"><div class="lbl">Grade distribution</div><div class="chips">{chips}</div>
+<p class="mut" style="margin-top:12px">{e(rep.get('scope', ''))}. The percentage is volume-weighted: the share of claimed challenge volume that the model does not attribute to independent, multi-party demand.</p></div>
+{mine}
+<div class="card"><div class="lbl">Get the detail</div><div class="minis">
+{buy('/commission/washreport', 'Full report', WASH_PRICES['washreport'], 'Every graded merchant: score, claimed vs organic-adjusted volume, top indicators.')}
+{buy('/commission/washcheck', 'Check one merchant', WASH_PRICES['washcheck'], 'Grade any Algorand payTo before you pay it (add ?payTo=).')}
+{buy('/commission/washclusters', 'Cluster graph', WASH_PRICES['washclusters'], 'Wallets funding several payers, and payers spread across merchants.')}
+</div><p class="mut" style="margin-top:12px">Pay with Pera, Defly or Lute on any device, or from any x402 client. You are charged only when the data is delivered.</p></div>
+<div class="card"><div class="lbl">How the score works</div><div class="kv sub">{wrows}</div>
+<p style="margin-top:12px">Each indicator's severity (0 to 1) is multiplied by its weight and the total is capped at 100. Levels: low under 20, medium 20-44, high 45-69, critical 70 and up. <a href="{e(_wj.METHODOLOGY)}">Full methodology</a>, including what has not been validated.</p></div>
+<div class="card"><div class="lbl">Limitations</div><ul class="ul">{lim}</ul></div>"""
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Provenance - x402 Challenge wash report</title><meta name="description" content="Wash-risk grades for the Algorand x402 Global Challenge leaderboard from public on-chain settlements. Free summary; per-merchant detail over x402.">
+<meta name="theme-color" content="#0a0e14"><style>{_RECEIPT_CSS}</style></head><body><div class="wrap">
+<div class="lbl">Provenance · Algorand x402 Challenge</div>
+<h1>Who is real on the leaderboard?</h1>
+<p class="lead">Wash-risk grades for the challenge's top merchants, computed from public on-chain USDC settlements. Updated {e(asof) if rep else 'soon'}.</p>
+{body}
+<p class="mut" style="font-size:13px">Published by Apeiron Capital Inc. Statistical estimates from public data, not findings about any operator's intent. Corrections: <a href="https://github.com/apeirontrade/provenance-site/issues">open an issue</a>. <a href="{e(PUBLIC_BASE)}/">Agent World</a> · <a href="{e(PUBLIC_BASE)}/x402">All products</a></p>
+</div></body></html>"""
+    return Response(page, mimetype="text/html")
 
 @app.route("/free")
 @app.route("/free/taste")
