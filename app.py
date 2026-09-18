@@ -1012,6 +1012,105 @@ def _guard():
                                 "hint": "Request rejected before payment verification — fix the parameters and retry; you have not been charged.",
                                 "docs": PUBLIC_BASE + "/x402.json"}), 400
 
+
+# ----------------------------------------------------------------------------- human receipt page
+# A person who pays in the browser used to get the raw JSON dumped on a blank blob: page, which
+# looks like a crash. The pay page tags its paid request with _human=1 (see _AvmPaywallProvider);
+# for those requests we return a readable receipt instead. API / agent callers are untouched.
+import html as _html
+
+_RECEIPT_CSS = """
+*{box-sizing:border-box}body{margin:0;background:#0a0e14;color:#e6edf3;
+font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:28px 18px 60px}
+.ok{display:flex;gap:14px;align-items:center;background:#0f2a1b;border:1px solid #1f7a45;
+border-radius:14px;padding:16px 18px;margin-bottom:18px}
+.ok .tick{flex:none;width:42px;height:42px;border-radius:50%;background:#22c55e;color:#04130a;
+font-size:24px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.ok b{display:block;font-size:19px;color:#fff}.ok span{color:#9fe8bd;font-size:14px}
+.card{background:#111823;border:1px solid #223047;border-radius:14px;padding:20px;margin-bottom:16px}
+.lbl{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#7d8da6;margin-bottom:6px}
+.q{color:#c9d5e6;font-style:italic}.a p{margin:0 0 12px}.a p:last-child{margin:0}
+.kv{display:grid;grid-template-columns:minmax(120px,32%) 1fr;gap:8px 14px;font-size:15px}
+.kv div:nth-child(odd){color:#7d8da6}.kv div{overflow-wrap:anywhere}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.chip{background:#16202e;border:1px solid #223047;border-radius:999px;padding:4px 12px;font-size:13px;color:#b8c6da}
+.btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+a.btn{display:inline-block;padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:600;
+background:#22c55e;color:#04130a}a.btn.alt{background:#16202e;color:#e6edf3;border:1px solid #223047}
+a{color:#6cb6ff}details{margin-top:6px}summary{cursor:pointer;color:#7d8da6;font-size:14px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0b111a;border:1px solid #223047;
+border-radius:10px;padding:14px;font-size:12.5px;color:#b8c6da}
+@media(max-width:520px){.kv{grid-template-columns:1fr}.kv div:nth-child(odd){margin-top:6px}}
+"""
+
+def _receipt_value(v):
+    if isinstance(v, (dict, list)):
+        return "<pre>" + _html.escape(json.dumps(v, indent=2, ensure_ascii=False)) + "</pre>"
+    return _html.escape(str(v))
+
+def _render_receipt(path, data, payer):
+    e = _html.escape
+    route = path.rsplit("/", 1)[-1]
+    meta = data.get("_meta") if isinstance(data, dict) else None
+    price = (meta or {}).get("price") or route_price(path)
+    agent = (data.get("agent") if isinstance(data, dict) else None) or ""
+    secs = data.get("thinking_seconds") if isinstance(data, dict) else None
+    head = (f"{e(str(agent))} took your request" if agent else "Your request was delivered")
+    sub = f"{e(str(price))} USDC paid on Algorand MainNet"
+    if secs is not None:
+        sub += f" &middot; answered in {e(str(secs))} seconds"
+    parts = [f'<div class="ok"><div class="tick">&#10003;</div><div><b>Paid and delivered &mdash; {head}</b>'
+             f'<span>{sub}. You were only charged because the work was delivered.</span></div></div>']
+    shown = {"_meta"}
+    if isinstance(data, dict) and data.get("question"):
+        parts.append(f'<div class="card"><div class="lbl">You asked</div><div class="q">{e(str(data["question"]))}</div></div>')
+        shown.add("question")
+    main_key = next((k for k in ("answer", "verdict", "dispatch", "report", "result", "headline") if isinstance(data, dict) and k in data), None)
+    if main_key:
+        val = data[main_key]
+        if isinstance(val, str):
+            body = "".join(f"<p>{e(x.strip())}</p>" for x in val.split("\n") if x.strip())
+        else:
+            body = _receipt_value(val)
+        label = f"{e(str(agent))} answered" if (agent and main_key == "answer") else e(main_key.replace("_", " ").title())
+        parts.append(f'<div class="card"><div class="lbl">{label}</div><div class="a">{body}</div></div>')
+        shown.add(main_key)
+    rest = [(k, v) for k, v in (data.items() if isinstance(data, dict) else []) if k not in shown and k not in ("agent", "thinking_seconds")]
+    if rest:
+        rows = "".join(f"<div>{e(k.replace('_', ' '))}</div><div>{_receipt_value(v)}</div>" for k, v in rest)
+        parts.append(f'<div class="card"><div class="lbl">Details</div><div class="kv">{rows}</div></div>')
+    proof = ""
+    if payer:
+        proof = (f'<div class="card"><div class="lbl">Proof of payment</div>Your payment is the most recent USDC transfer from your wallet, and it appears under History in your wallet app. '
+                 f'<a href="https://allo.info/account/{e(payer)}" target="_blank" rel="noopener">View it on the Algorand explorer</a>.'
+                 f'<div class="chips"><span class="chip">route /commission/{e(route)}</span><span class="chip">network Algorand MainNet</span>'
+                 f'<span class="chip">asset USDC</span></div>'
+                 f'<p style="margin:14px 0 0;font-size:14px;color:#9fb0c8">If your wallet app still says &ldquo;Transaction processing&rdquo;, '
+                 f'that is normal: the wallet shows it after every signature and never hears back from websites. Tap Done. '
+                 f'This page is your confirmation.</p></div>')
+    parts.append(proof)
+    parts.append(f'<div class="btns"><a class="btn" href="{e(PUBLIC_BASE)}/commission">Commission another agent</a>'
+                 f'<a class="btn alt" href="{e(PUBLIC_BASE)}/">Watch the agents live</a></div>')
+    raw = _html.escape(json.dumps(data, indent=2, ensure_ascii=False))
+    parts.append(f'<details><summary>Raw response (for developers)</summary><pre>{raw}</pre></details>')
+    return ('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            f'<title>Paid and delivered</title><style>{_RECEIPT_CSS}</style></head>'
+            f'<body><div class="wrap">{"".join(parts)}</div></body></html>')
+
+@app.after_request
+def _human_receipt(resp):
+    try:
+        if (request.path.startswith(PAID_PREFIX) and b"_human=1" in (request.query_string or b"")
+                and resp.status_code == 200 and (resp.mimetype or "") == "application/json"):
+            data = json.loads(resp.get_data(as_text=True))
+            resp.set_data(_render_receipt(request.path, data, payer_address()))
+            resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    except Exception:
+        pass   # never let the receipt page break a delivery the customer paid for
+    return resp
+
 from x402.http.types import PaywallConfig as _PaywallConfig
 
 class _AvmPaywallProvider:
@@ -1029,6 +1128,21 @@ class _AvmPaywallProvider:
     _ENCODE_NEW = "btoa(unescape(encodeURIComponent(JSON.stringify(Y))))"
     _TRANSLIT = {"\u2014": "-", "\u2013": "-", "\u2192": "->", "\u00b7": "|", "\u2026": "...",
                  "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'}
+
+    _BOOT_JS = ("<script>(function(){try{var rx=/^(@txnlab\\/use-wallet|PeraWallet\\.|DeflyWallet\\.|"
+                "walletconnect$|wc@2:|WALLETCONNECT_DEEPLINK_CHOICE)/;[localStorage,sessionStorage]"
+                ".forEach(function(s){Object.keys(s).forEach(function(k){if(rx.test(k))s.removeItem(k)})})"
+                "}catch(e){}})();</script>")
+    _HINT_JS = ("<script>window.addEventListener('load',function(){setTimeout(function(){try{"
+                "var c=document.querySelector('.container')||document.body;if(document.getElementById('aw-hint'))return;"
+                "var d=document.createElement('div');d.id='aw-hint';"
+                "d.style.cssText='max-width:560px;margin:18px auto 0;padding:14px 16px;border-radius:10px;"
+                "background:#f3f6ff;color:#1f2a44;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;text-align:left';"
+                "d.innerHTML='<b>How paying works</b><br>"
+                "<b>On a computer:</b> click Connect wallet, choose Pera or Defly, then scan the QR code with the wallet app on your phone.<br>"
+                "<b>On a phone:</b> tap Connect wallet and approve in your wallet app, then come back to this tab.<br>"
+                "You are only charged if the agent delivers. The answer appears on this page, usually within 5 to 30 seconds.<br>Your wallet app will say <i>Transaction processing</i> after you sign. That is normal - tap Done and return here for your confirmation and answer.';"
+                "c.appendChild(d)}catch(e){}},600)});</script>")
 
     @classmethod
     def _latin1_safe(cls, o):
@@ -1049,6 +1163,16 @@ class _AvmPaywallProvider:
         encode_patched = template.count(self._ENCODE_OLD) == 1
         if encode_patched:
             template = template.replace(self._ENCODE_OLD, self._ENCODE_NEW)
+        # Second SDK defect: the page persists the wallet session and reloads it, but never
+        # calls resumeSessions(), so a returning visitor (or anyone who refreshes) sees a
+        # wallet that looks connected yet cannot sign ("PeraWalletConnect was not initialized
+        # correctly") and never gets a QR code. Start every load from a clean slate so the
+        # visitor always gets the real connect step: QR on a computer, app hand-off on a phone.
+        _wait = "Requesting content with payment..."
+        if template.count(_wait) == 1:
+            template = template.replace(_wait, "Payment sent. Your agent is working on it - this usually takes 5 to 30 seconds. Keep this tab open.")
+        template = template.replace("<head>", "<head>" + self._BOOT_JS, 1)
+        template = template.replace("</body>", self._HINT_JS + "</body>", 1)
         amount = 0.0
         try:
             first = (payment_required.accepts or [None])[0]
@@ -1076,7 +1200,7 @@ class _AvmPaywallProvider:
             "amount": amount,
             "testnet": (NETWORK != "mainnet"),
             "displayAmount": amount,
-            "currentUrl": cur,
+            "currentUrl": cur + ("&" if "?" in cur else "?") + "_human=1",
         }
         if not encode_patched:
             # SDK changed under us: the JS patch did not apply, so strip the payload
