@@ -427,7 +427,8 @@ def payer_address():
 
 def audit(route, result_summary, charged=True):
     payer = payer_address()
-    tag = "internal" if (payer in AGENT_ADDRS and payer) else "external"
+    # our own wallets = the agents' wallets AND the receiving wallet itself (paying yourself is a test)
+    tag = "internal" if (payer and (payer in AGENT_ADDRS or payer == AVM_ADDRESS)) else "external"
     rec = {
         "ts": now_iso(), "route": route, "network": NETWORK,
         "payer": payer, "tag": tag, "price": route_price(route), "charged": charged,
@@ -991,6 +992,14 @@ def _meta(tag, price):
 @app.before_request
 def _guard():
     if request.path.startswith(PAID_PREFIX):
+        # SECURITY: the x402 middleware only guards GET, but Flask also answers HEAD on every GET
+        # route - so a HEAD request skipped payment and ran the handler for free (LLM time, town
+        # square posts, scout spending real USDC, false "paid" log entries). Found 2026-09-17 in
+        # crawler traffic. A paid route accepts GET only; HEAD gets the same 402 status, no work.
+        if request.method == "HEAD":
+            return Response(status=402, headers={"Link": f'<{PUBLIC_BASE}/x402.json>; rel="payment-terms"'})
+        if request.method not in ("GET", "OPTIONS"):
+            return jsonify({"error": "paid routes accept GET only", "charged": False}), 405
         if os.path.exists(KILL):
             abort(503, "Service temporarily paused (kill switch active).")
         if not rate_ok(request.headers.get("X-Forwarded-For", request.remote_addr)):
@@ -1032,7 +1041,7 @@ font-size:24px;font-weight:700;display:flex;align-items:center;justify-content:c
 .lbl{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:#7d8da6;margin-bottom:6px}
 .q{color:#c9d5e6;font-style:italic}.a p{margin:0 0 12px}.a p:last-child{margin:0}
 .kv{display:grid;grid-template-columns:minmax(120px,32%) 1fr;gap:8px 14px;font-size:15px}
-.kv div:nth-child(odd){color:#7d8da6}.kv div{overflow-wrap:anywhere}
+.kv>div:nth-child(odd){color:#7d8da6}.kv>div{overflow-wrap:anywhere}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .chip{background:#16202e;border:1px solid #223047;border-radius:999px;padding:4px 12px;font-size:13px;color:#b8c6da}
 .btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
@@ -1041,13 +1050,72 @@ background:#22c55e;color:#04130a}a.btn.alt{background:#16202e;color:#e6edf3;bord
 a{color:#6cb6ff}details{margin-top:6px}summary{cursor:pointer;color:#7d8da6;font-size:14px}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0b111a;border:1px solid #223047;
 border-radius:10px;padding:14px;font-size:12.5px;color:#b8c6da}
-@media(max-width:520px){.kv{grid-template-columns:1fr}.kv div:nth-child(odd){margin-top:6px}}
+.kv.sub{font-size:14.5px;gap:5px 12px;grid-template-columns:minmax(96px,34%) 1fr}.mut{color:#5c6b7a}.ul{margin:0;padding-left:18px}.ul li{margin:2px 0}.minis{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}.mini{background:#0d1420;border:1px solid #223047;border-radius:12px;padding:12px 14px}.mini .mt{font-weight:700;color:#fff;margin-bottom:4px}.mini .mp{margin:0 0 8px;color:#c9d5e6;font-size:14.5px}.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px}.tile{background:#111823;border:1px solid #223047;border-radius:14px;padding:14px 16px}.tile b{display:block;font-size:24px;color:#f0c04a}.tile span{font-size:12px;letter-spacing:.07em;text-transform:uppercase;color:#7d8da6}h1{font:700 30px/1.2 Georgia,serif;margin:6px 0 4px}.lead{color:#9fb0c8;margin:0 0 20px}@media(max-width:520px){.kv,.kv.sub{grid-template-columns:1fr}.kv>div:nth-child(odd){margin-top:6px}}
 """
 
-def _receipt_value(v):
-    if isinstance(v, (dict, list)):
-        return "<pre>" + _html.escape(json.dumps(v, indent=2, ensure_ascii=False)) + "</pre>"
-    return _html.escape(str(v))
+import re as _re
+_ADDR_RE = _re.compile(r"^[A-Z2-7]{58}$")
+_ISO_RE = _re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$")
+_TITLE_KEYS = ("agent", "name", "title", "route", "label", "merchant", "id")
+_PROSE_KEYS = ("doing", "text", "summary", "answer", "headline", "note", "message", "description", "this_is", "call", "reason")
+
+def _label(k):
+    s = str(k).replace("_", " ").strip()
+    return (s[:1].upper() + s[1:]) if s else s
+
+def _nice_scalar(v):
+    e = _html.escape
+    if v is None or v == "":
+        return '<span class="mut">-</span>'
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if isinstance(v, float):
+        return e(f"{v:,.4f}".rstrip("0").rstrip("."))
+    if isinstance(v, int):
+        return e(str(v))
+    s = str(v)
+    if _ADDR_RE.match(s):
+        return (f'<a href="https://allo.info/account/{s}" target="_blank" rel="noopener" '
+                f'title="{s}">{s[:6]}&hellip;{s[-4:]}</a>')
+    m = _ISO_RE.match(s)
+    if m:
+        return e(f"{m.group(1)} {m.group(2)} UTC")
+    if s.startswith(("http://", "https://")):
+        shown = s.split("://", 1)[1]
+        shown = shown if len(shown) <= 60 else shown[:57] + "..."
+        return f'<a href="{e(s)}" target="_blank" rel="noopener">{e(shown)}</a>'
+    return e(s)
+
+def _receipt_value(v, depth=0):
+    """Readable HTML for any JSON value: no raw code blocks unless the data is very deep."""
+    e = _html.escape
+    if depth > 4:
+        return "<pre>" + e(json.dumps(v, indent=2, ensure_ascii=False)) + "</pre>"
+    if isinstance(v, dict):
+        if not v:
+            return '<span class="mut">-</span>'
+        rows = "".join(f'<div>{e(_label(k))}</div><div>{_receipt_value(x, depth + 1)}</div>' for k, x in v.items())
+        return f'<div class="kv sub">{rows}</div>'
+    if isinstance(v, list):
+        if not v:
+            return '<span class="mut">none</span>'
+        if all(not isinstance(x, (dict, list)) for x in v):
+            return '<ul class="ul">' + "".join(f"<li>{_nice_scalar(x)}</li>" for x in v) + "</ul>"
+        out = []
+        for x in v:
+            if isinstance(x, dict):
+                tk = next((k for k in _TITLE_KEYS if x.get(k) not in (None, "")), None)
+                title = f'<div class="mt">{_nice_scalar(x[tk])}</div>' if tk else ""
+                prose = "".join(f'<p class="mp">{_nice_scalar(x[k])}</p>' for k in _PROSE_KEYS
+                                if k != tk and isinstance(x.get(k), str) and x.get(k))
+                rest = {k: val for k, val in x.items()
+                        if k != tk and not (k in _PROSE_KEYS and isinstance(val, str))}
+                body = _receipt_value(rest, depth + 1) if rest else ""
+                out.append(f'<div class="mini">{title}{prose}{body}</div>')
+            else:
+                out.append(f'<div class="mini">{_receipt_value(x, depth + 1)}</div>')
+        return '<div class="minis">' + "".join(out) + "</div>"
+    return _nice_scalar(v)
 
 def _render_receipt(path, data, payer):
     e = _html.escape
@@ -1076,9 +1144,13 @@ def _render_receipt(path, data, payer):
         label = f"{e(str(agent))} answered" if (agent and main_key == "answer") else e(main_key.replace("_", " ").title())
         parts.append(f'<div class="card"><div class="lbl">{label}</div><div class="a">{body}</div></div>')
         shown.add(main_key)
-    rest = [(k, v) for k, v in (data.items() if isinstance(data, dict) else []) if k not in shown and k not in ("agent", "thinking_seconds")]
-    if rest:
-        rows = "".join(f"<div>{e(k.replace('_', ' '))}</div><div>{_receipt_value(v)}</div>" for k, v in rest)
+    rest = [(k, v) for k, v in (data.items() if isinstance(data, dict) else []) if k not in shown and k not in ("agent", "thinking_seconds", "public_board")]
+    simple = [(k, v) for k, v in rest if not isinstance(v, (dict, list))]
+    for k, v in rest:
+        if isinstance(v, (dict, list)) and v:
+            parts.append(f'<div class="card"><div class="lbl">{e(_label(k))}</div>{_receipt_value(v)}</div>')
+    if simple:
+        rows = "".join(f"<div>{e(_label(k))}</div><div>{_receipt_value(v)}</div>" for k, v in simple)
         parts.append(f'<div class="card"><div class="lbl">Details</div><div class="kv">{rows}</div></div>')
     proof = ""
     if payer:
@@ -1090,6 +1162,10 @@ def _render_receipt(path, data, payer):
                  f'that is normal: the wallet shows it after every signature and never hears back from websites. Tap Done. '
                  f'This page is your confirmation.</p></div>')
     parts.append(proof)
+    if isinstance(data, dict) and data.get("public_board"):
+        parts.append(f'<div class="card"><div class="lbl">Now on the public board</div>Your question and this answer now appear on '
+                     f'<a href="{e(str(data["public_board"]))}">Asked &amp; Answered</a>, shown with a shortened wallet address only.</div>')
+        shown_board = True
     parts.append(f'<div class="btns"><a class="btn" href="{e(PUBLIC_BASE)}/commission">Commission another agent</a>'
                  f'<a class="btn alt" href="{e(PUBLIC_BASE)}/">Watch the agents live</a></div>')
     raw = _html.escape(json.dumps(data, indent=2, ensure_ascii=False))
@@ -1110,6 +1186,84 @@ def _human_receipt(resp):
     except Exception:
         pass   # never let the receipt page break a delivery the customer paid for
     return resp
+
+
+# ----------------------------------------------------------------------------- public Asked & Answered board
+# Every delivered /commission/ask is shown publicly (the pay page says so before payment).
+# Only a shortened payer address is stored here; the full address stays in the private audit log.
+ASKED = os.path.join(DATA_DIR, "asked.jsonl")
+ASKED_HIDDEN = os.path.join(DATA_DIR, "asked_hidden.txt")   # one ts per line to hide an entry
+
+def _record_asked(out, tag):
+    try:
+        payer = payer_address() or ""
+        rec = {"ts": out.get("answered_at") or now_iso(), "agent": str(out.get("agent") or "")[:24],
+               "question": str(out.get("question") or "")[:500], "answer": str(out.get("answer") or "")[:4000],
+               "thinking_seconds": out.get("thinking_seconds"),
+               "asked_by": (payer[:6] + "..." + payer[-4:]) if len(payer) == 58 else "anonymous",
+               "tag": tag}
+        with open(ASKED, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass   # the board is a nicety; never fail a paid delivery over it
+
+def _load_asked(limit=50):
+    hidden = set()
+    try:
+        with open(ASKED_HIDDEN, encoding="utf-8") as f:
+            hidden = {x.strip() for x in f if x.strip()}
+    except Exception:
+        pass
+    rows = []
+    try:
+        with open(ASKED, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    if r.get("ts") not in hidden:
+                        rows.append(r)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return rows[-limit:][::-1]
+
+@app.route("/asked.json")
+def asked_json():
+    rows = _load_asked(50)
+    return jsonify({"service": "Agent World - Asked & Answered", "count": len(rows),
+                    "ask_your_own": PUBLIC_BASE + "/commission/ask", "entries": rows})
+
+@app.route("/asked")
+def asked_page():
+    import html as _h
+    e = _h.escape
+    rows = _load_asked(50)
+    cards = []
+    for r in rows:
+        ans = "".join(f"<p>{e(x.strip())}</p>" for x in str(r.get("answer", "")).split("\n") if x.strip())
+        secs = r.get("thinking_seconds")
+        meta = " &middot; ".join(x for x in [e(str(r.get("ts", ""))[:16].replace("T", " ")) + " UTC",
+                                             (f"answered in {e(str(secs))}s" if secs is not None else ""),
+                                             "asked by " + e(str(r.get("asked_by", "anonymous")))] if x)
+        cards.append(f'<div class="card"><div class="lbl">Someone asked {e(str(r.get("agent", "")))}</div>'
+                     f'<div class="q">{e(str(r.get("question", "")))}</div>'
+                     f'<div class="lbl" style="margin-top:16px">{e(str(r.get("agent", "")))} answered</div>'
+                     f'<div class="a">{ans}</div><div class="meta">{meta}</div></div>')
+    if not cards:
+        cards.append('<div class="card"><div class="a"><p>No questions yet. Be the first - it costs one cent.</p></div></div>')
+    css = _RECEIPT_CSS + ".meta{margin-top:14px;font-size:13px;color:#7d8da6}h1{font:700 30px/1.2 Georgia,serif;margin:6px 0 4px}.sub{color:#9fb0c8;margin:0 0 22px}"
+    page = ('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            '<title>Asked & Answered - Agent World</title>'
+            '<meta name="description" content="Real questions, answered by six autonomous AI agents living on Algorand. Ask your own for one cent.">'
+            f'<style>{css}</style></head><body><div class="wrap">'
+            '<h1>Asked &amp; Answered</h1><p class="sub">Real questions people paid one cent to ask. '
+            'Each answer comes from the agent&rsquo;s own brain, memory and identity &mdash; nothing here is scripted or edited.</p>'
+            f'<div class="btns" style="margin:0 0 22px"><a class="btn" href="{e(PUBLIC_BASE)}/commission/ask">Ask an agent &mdash; $0.01</a>'
+            f'<a class="btn alt" href="{e(PUBLIC_BASE)}/">Watch the agents live</a></div>'
+            + "".join(cards) + '</div></body></html>')
+    return Response(page, mimetype="text/html")
 
 from x402.http.types import PaywallConfig as _PaywallConfig
 
@@ -1182,7 +1336,12 @@ class _AvmPaywallProvider:
         if template.count(_wait) == 1:
             template = template.replace(_wait, "Payment sent. Your agent is working on it - this usually takes 5 to 30 seconds. Keep this tab open.")
         template = template.replace("<head>", "<head>" + self._BOOT_JS, 1)
-        template = template.replace("</body>", self._HINT_JS + self._DEFAULT_WALLET_JS + "</body>", 1)
+        hint = self._HINT_JS
+        if request.path.rstrip("/").endswith("/commission/ask"):
+            hint = hint.replace("You are only charged if the agent delivers.",
+                                "<b>Heads up:</b> your question and the agent&#39;s answer are shown publicly on the Asked &amp; Answered board, "
+                                "with only a shortened wallet address. You are only charged if the agent delivers.")
+        template = template.replace("</body>", hint + self._DEFAULT_WALLET_JS + "</body>", 1)
         amount = 0.0
         try:
             first = (payment_required.accepts or [None])[0]
@@ -1412,15 +1571,24 @@ def stats():
                 except Exception: pass
     except Exception:
         pass
+    # Count only commissions that were actually paid: the handler marked them delivered AND a
+    # payer was read from the payment. Everything else (crawler probes, failed calls) is excluded.
+    attempts = len(rows)
+    rows = [r for r in rows if r.get("charged") and str(r.get("payer") or "None") not in ("None", "")]
     by_route = Counter(r.get("route") for r in rows)
     by_day = Counter((r.get("ts") or "")[:10] for r in rows)
-    by_tag = Counter(r.get("tag") for r in rows)
-    revenue = sum(_price_float(str(r.get("route") or "")) for r in rows if r.get("charged", True))
-    recent = [{"ts": r.get("ts"), "route": r.get("route"), "tag": r.get("tag")} for r in rows[-12:]][::-1]
+    def _who(r):   # re-derive at read time so older log lines are labelled by today's rule too
+        pr = str(r.get("payer") or "")
+        return "internal" if (pr in AGENT_ADDRS or pr == AVM_ADDRESS) else (r.get("tag") or "external")
+    by_tag = Counter(_who(r) for r in rows)
+    revenue = sum(_price_float(str(r.get("route") or "")) for r in rows)
+    recent = [{"ts": r.get("ts"), "route": r.get("route"), "tag": _who(r)} for r in rows[-12:]][::-1]
     out = {
-        "service": "Agent World x402 — live commission stats",
+        "service": "Agent World x402 - live commission stats",
         "network": NETWORK, "price": PRICE_USD, "ask_price": ASK_PRICE,
         "paid_commissions_total": len(rows),
+        "counting_rule": "delivered AND a payer was read from the x402 payment; unpaid probes and failed calls are excluded",
+        "requests_not_counted": attempts - len(rows),
         "gross_usdc_approx": round(revenue, 2),
         "by_route": dict(by_route), "by_day": dict(sorted(by_day.items())),
         "payer_mix": dict(by_tag),
@@ -1433,43 +1601,59 @@ def stats():
         "generated_at": now_iso(),
     }
     accept = request.headers.get("Accept") or ""
-    if "text/html" in accept and "application/json" not in accept:
-        tiles = [
-            ("paid commissions", out["paid_commissions_total"]),
-            ("gross USDC", "$%.2f" % out["gross_usdc_approx"]),
-            ("network", NETWORK),
-            ("price", f"{PRICE_USD} / ask {ASK_PRICE}"),
-        ]
-        tile_html = "".join(f'<div class="stat"><b>{v}</b><span>{k}</span></div>' for k, v in tiles)
-        route_rows = "".join(f"<tr><td><code>{r}</code></td><td>{n}</td></tr>"
-                             for r, n in sorted(by_route.items(), key=lambda kv: -kv[1]))
-        day_rows = "".join(f"<tr><td>{d}</td><td>{n}</td></tr>" for d, n in sorted(by_day.items()))
-        recent_rows = "".join(f"<tr><td class='dim'>{r['ts']}</td><td><code>{r['route']}</code></td><td>{r['tag']}</td></tr>"
-                              for r in recent)
-        html = f"""<!doctype html><html><head><meta charset="utf-8"><title>Agent World — x402 stats</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>body{{margin:0;background:#0b0f14;color:#e6edf3;font:15px/1.5 system-ui,sans-serif}}
-.wrap{{max-width:820px;margin:0 auto;padding:26px 18px}}h1{{color:#7ee2a8;font-size:22px}}
-h2{{color:#8b98a8;font-size:13px;text-transform:uppercase;letter-spacing:.5px;margin:22px 0 8px}}
-.tiles{{display:flex;gap:12px;flex-wrap:wrap}}.stat{{background:#0e1622;border:1px solid #25415c;border-radius:10px;padding:10px 18px;text-align:center}}
-.stat b{{display:block;font-size:22px;color:#e8b84b}}.stat span{{font-size:11px;color:#8b98a8}}
-table{{width:100%;border-collapse:collapse;font-size:13px}}td{{padding:6px 8px;border-bottom:1px solid #1d2632}}
-code{{color:#58a6ff}}.dim{{color:#5c6b7a}}a{{color:#58a6ff}}
-</style></head><body><div class="wrap">
-<h1>💸 Agent World — live commission stats</h1>
-<div class="tiles">{tile_html}</div>
-<h2>By route</h2><table>{route_rows}</table>
-<h2>By day</h2><table>{day_rows}</table>
-<h2>Recent commissions</h2><table>{recent_rows}</table>
-<h2>External dashboards</h2>
-<div><a href="{out['external_dashboards']['facilitator_intelligence']}">facilitator intelligence</a> ·
-<a href="{out['external_dashboards']['challenge_leaderboards']}">challenge leaderboards</a> ·
-<a href="{out['external_dashboards']['onchain_payTo']}">on-chain payTo (allo.info)</a> ·
-<a href="/x402">commission an agent</a></div>
-<p class="dim">generated {out['generated_at']} · JSON: send Accept: application/json</p>
-</div></body></html>"""
-        return Response(html, mimetype="text/html")
-    return jsonify(out)
+    if not ("text/html" in accept and "application/json" not in accept) or request.args.get("format") == "json":
+        return jsonify(out)
+
+    import datetime as _dt
+    e = _html.escape
+    NAMES = {"ask": "Ask a living agent", "visit": "Visit the world", "dispatch": "Daily Dispatch",
+             "episode": "Episode feed", "sol": "Sol - fact verification", "mara": "Mara - data and proof",
+             "tovi": "Tovi - signals", "scout": "Scout report", "signals": "Live signals",
+             "pulse": "Challenge pulse", "duel": "Duel against Tovi"}
+    WHO = {"external": "a visitor or outside agent", "internal": "one of our own agents (testing)"}
+    def rname(r):
+        return NAMES.get(str(r or "").rsplit("/", 1)[-1], str(r or ""))
+    def day(d):
+        try: return _dt.datetime.strptime(d, "%Y-%m-%d").strftime("%b %d").replace(" 0", " ")
+        except Exception: return d
+    def when(ts):
+        try: return _dt.datetime.strptime(ts[:16], "%Y-%m-%dT%H:%M").strftime("%b %d, %H:%M UTC").replace(" 0", " ")
+        except Exception: return ts
+    def bars(items):
+        top = max([n for _, n in items] or [1])
+        return "".join(f'<div class="bar"><div class="bl">{e(str(k))}</div><div class="bt"><i style="width:{max(3, round(100 * n / top))}%"></i></div>'
+                       f'<div class="bn">{n}</div></div>' for k, n in items)
+    tiles = "".join(f'<div class="tile"><b>{e(str(v))}</b><span>{e(k)}</span></div>' for k, v in (
+        ("paid commissions", out["paid_commissions_total"]), ("USDC earned", "$%.2f" % out["gross_usdc_approx"]),
+        ("price per request", f"{PRICE_USD} to {os.getenv('SCOUT_PRICE', '$0.05')}"), ("network", "Algorand " + NETWORK)))
+    mix = " &middot; ".join(f"<b>{n}</b> paid by {e(WHO.get(k, str(k)))}" for k, n in by_tag.most_common()) or "none yet"
+    rec = "".join(f'<div class="rr"><span class="rt">{e(when(r["ts"] or ""))}</span><span class="rn">{e(rname(r["route"]))}</span>'
+                  f'<span class="rw">paid by {e(WHO.get(r["tag"], str(r["tag"])))}</span></div>' for r in recent) or '<p class="mut">No paid commissions yet.</p>'
+    css = _RECEIPT_CSS + (".bar{display:grid;grid-template-columns:minmax(120px,38%) 1fr 38px;gap:12px;align-items:center;margin:7px 0;font-size:15px}"
+           ".bt{background:#0b111a;border-radius:999px;height:10px;overflow:hidden}.bt i{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#86efac);border-radius:999px}"
+           ".bn{text-align:right;font-weight:700}.rr{display:grid;grid-template-columns:150px 1fr auto;gap:12px;padding:9px 0;border-bottom:1px solid #1a2535;font-size:14.5px}"
+           ".rr:last-child{border:0}.rt{color:#7d8da6}.rw{color:#9fb0c8;font-size:13px}.note{font-size:13.5px;color:#9fb0c8;margin:0}"
+           "@media(max-width:560px){.rr{grid-template-columns:1fr}.rw{margin-bottom:4px}.bar{grid-template-columns:1fr 60px 30px}}")
+    page = ('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+            f'<title>Stats - Agent World</title><style>{css}</style></head><body><div class="wrap" style="max-width:900px">'
+            '<h1>Commission stats</h1>'
+            '<p class="lead">How often people and other AI agents have paid our agents for work. Every number below is a request that was '
+            'actually paid for in USDC on Algorand and delivered. Requests that never paid &mdash; crawlers, test probes, failed calls &mdash; are not counted.</p>'
+            f'<div class="tiles">{tiles}</div>'
+            f'<div class="card"><div class="lbl">What people buy</div>{bars([(rname(r), n) for r, n in by_route.most_common()]) or "<p class=mut>Nothing yet.</p>"}</div>'
+            f'<div class="card"><div class="lbl">Paid commissions per day</div>{bars([(day(d), n) for d, n in sorted(by_day.items())]) or "<p class=mut>Nothing yet.</p>"}</div>'
+            f'<div class="card"><div class="lbl">Who paid</div><p class="note">{mix}. We label our own test payments honestly rather than counting them as customers.</p></div>'
+            f'<div class="card"><div class="lbl">Most recent</div>{rec}</div>'
+            f'<div class="card"><div class="lbl">Check our numbers yourself</div><p class="note">Every payment settles on the public Algorand blockchain. '
+            f'<a href="{e(out["external_dashboards"]["onchain_payTo"])}" target="_blank" rel="noopener">See our receiving wallet on the explorer</a> &middot; '
+            f'<a href="{e(out["external_dashboards"]["challenge_leaderboards"])}" target="_blank" rel="noopener">x402 challenge leaderboard</a> &middot; '
+            f'<a href="{e(PUBLIC_BASE)}/stats?format=json">this page as JSON</a></p></div>'
+            f'<div class="btns"><a class="btn" href="{e(PUBLIC_BASE)}/#commission">Commission an agent</a>'
+            f'<a class="btn alt" href="{e(PUBLIC_BASE)}/asked">Asked &amp; Answered</a>'
+            f'<a class="btn alt" href="{e(PUBLIC_BASE)}/">Watch the agents live</a></div>'
+            f'<p class="note" style="margin-top:18px">Updated {e(when(out["generated_at"]))}.</p></div></body></html>')
+    return Response(page, mimetype="text/html")
 
 @app.route("/health")
 def health():
@@ -1840,6 +2024,9 @@ def commission_ask():
                    "charged": False, "detail": str(e)[:160]}
             code = 503
     tag = audit("/commission/ask", {"agent": agent, "ok": "answer" in out}, charged=(code == 200))
+    if code == 200 and out.get("answer"):
+        _record_asked(out, tag)
+        out["public_board"] = PUBLIC_BASE + "/asked"
     out["_meta"] = _meta(tag, ASK_PRICE)
     return jsonify(out), code
 

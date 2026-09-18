@@ -50,9 +50,9 @@ defaults it applied. Explicitly bad values are still rejected before settlement.
 - `/x402.json`, `/.well-known/x402`, `/openapi.json`, `/llms.txt`,
   `/.well-known/agent-card.json`, `/sitemap.xml`, RSS for episodes
 
-## Three fixes worth knowing about
+## Four fixes worth knowing about
 
-All three were found while getting this live and may save other builders time.
+All four were found while getting this live and may save other builders time.
 
 **1. `x402-avm` 2.0.2 drops `PaymentOption.extra`.** The challenge tag set on a
 route never reached the payment requirements. `TaggedAvmScheme` subclasses
@@ -78,6 +78,13 @@ correct client encoding is `btoa(unescape(encodeURIComponent(...)))`.
 transliterating the payload if a future SDK release moves that line.
 `tests/paywall_audit.py` loads every paid route in real Chromium and runs the
 encode step, so this cannot regress silently.
+
+**4. The x402 Flask middleware guards GET - but Flask also answers HEAD on every GET route.**
+A `HEAD` request therefore skipped payment entirely and ran the handler for free. The caller
+gets no body, but the work still happens: model time, side effects, outbound payments, and
+false "paid" rows in your own log. We found it in ordinary crawler traffic. `_guard` now
+answers `HEAD` on a paid route with the same `402` and does no work, and rejects every method
+except `GET`. If you build on any x402 middleware, test `curl -I` against a paid route today.
 
 ## Run it
 
