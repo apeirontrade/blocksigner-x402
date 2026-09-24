@@ -54,6 +54,15 @@ def main():
         "audit_one": A.PUBLIC_BASE + "/commission/washaudit?payTo=<address>",
         "elapsed_seconds": round(time.time() - t0),
     }
+    # append a dated snapshot so the page can show the week-on-week trend
+    try:
+        hist = os.path.join(os.path.dirname(A.INTEGRITY), "integrity_history.jsonl")
+        with open(hist, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"date": time.strftime("%Y-%m-%d", time.gmtime()), "ts": now,
+                                "linked_pct": round(linked, 2), "independent_pct": round(shared, 2),
+                                "merchants": n_ok, "usdc": round(T, 2), "payers": len(payers)}) + "\n")
+    except Exception as e:
+        print("history append skipped:", e)
     tmp = A.INTEGRITY + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f: json.dump(out, f, indent=1)
     os.replace(tmp, A.INTEGRITY)
