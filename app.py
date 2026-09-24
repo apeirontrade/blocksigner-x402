@@ -2488,6 +2488,25 @@ def commission_washclusters():
     return jsonify(out), code
 
 INTEGRITY = os.path.join(DATA_DIR, "integrity.json")
+INTEGRITY_BASE = os.path.join(DATA_DIR, "integrity_base.json")
+
+def _base_section():
+    try:
+        with open(INTEGRITY_BASE, encoding="utf-8") as f: b = json.load(f)
+    except Exception:
+        return ""
+    e = _html.escape
+    rows = "".join(f"<tr><td>{e(c['label'])}</td><td class=\"num\">${c['usd']:,}</td><td class=\"num\"><b>{c['share_pct']:.1f}%</b></td></tr>" for c in b.get("classes", []))
+    sc = b.get("scope", {}); cav = "".join(f"<li>{e(x)}</li>" for x in b.get("caveats", []))
+    return (f'<div class="card"><div class="lbl">Cross-chain: x402 on Base, {b.get("window", {}).get("days", 30)} days to {e(str(b.get("window", {}).get("to", "")))}</div>'
+            f'<p><b>{e(b.get("headline", ""))}</b></p>'
+            f'<div class="tiles"><div class="tile"><b>${sc.get("total_usd", 0):,}</b><span>USDC settled</span></div>'
+            f'<div class="tile"><b>{sc.get("transfers", 0):,}</b><span>transfers</span></div>'
+            f'<div class="tile"><b>{sc.get("sellers", 0):,}</b><span>sellers</span></div>'
+            f'<div class="tile"><b>{sc.get("unique_buyers", 0):,}</b><span>buyer wallets</span></div></div>'
+            f'<table class="integ"><thead><tr><th>Payer class</th><th class="num">USD</th><th class="num">Share</th></tr></thead><tbody>{rows}</tbody></table>'
+            f'<p class="mut" style="margin-top:12px">{e(sc.get("note", ""))}.</p><p>{e(b.get("organic_tail", ""))}</p>'
+            f'<p class="mut">{e(b.get("method", {}).get("summary", ""))}</p><ul class="ul">{cav}</ul></div>')
 
 def integrity_report():
     try:
@@ -2515,6 +2534,10 @@ def provenance_integrity():
         return jsonify({"error": "the integrity report is not published yet"}), 404
     accept = request.headers.get("Accept") or ""
     if request.path.endswith(".json") or request.args.get("format") == "json" or ("text/html" not in accept):
+        try:
+            with open(INTEGRITY_BASE, encoding="utf-8") as f: r = {**r, "cross_chain": {"base": json.load(f)}}
+        except Exception:
+            pass
         return jsonify(r)
     e = _html.escape
     rows = "".join(
@@ -2541,6 +2564,7 @@ table.integ td.num,table.integ th.num{{text-align:right;font-variant-numeric:tab
 <table class="integ"><thead><tr><th>Payer class</th><th class="num">Wallets</th><th class="num">Transfers</th><th class="num">USDC</th><th class="num">Share</th></tr></thead><tbody>{rows}</tbody></table>
 <p class="mut" style="margin-top:12px">{e(sc.get('note', ''))}. No merchant is named in this report; per-merchant grades are the paid products below.</p></div>
 <div class="card"><div class="lbl">Method</div><p>{e(m.get('summary', ''))}</p><p class="mut">Version {e(str(m.get('version', '')))} · <a href="{e(m.get('url', ''))}">methodology</a></p></div>
+{_base_section()}
 <div class="card"><div class="lbl">Our own entry</div><p><b>Grade {e(str(op.get('grade', '')))}</b>. {e(op.get('statement', ''))}</p></div>
 <div class="card"><div class="lbl">Caveats</div><ul class="ul">{cav}</ul></div>
 <div class="card"><div class="lbl">Per-merchant detail</div><p>Every graded merchant, A to F, with indicators and top payers: <a href="{e(PUBLIC_BASE)}/commission/washreport">full report</a> ({e(WASH_PRICES['washreport'])}). Check one merchant before you pay it: <a href="{e(PUBLIC_BASE)}/commission/washcheck">washcheck</a> ({e(WASH_PRICES['washcheck'])}; first call free with ?trial=1). Machine-readable copy of this page: <a href="{e(PUBLIC_BASE)}/provenance/integrity.json">integrity.json</a>.</p></div>
