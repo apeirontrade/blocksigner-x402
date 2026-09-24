@@ -2487,6 +2487,67 @@ def commission_washclusters():
     out["_meta"] = _meta(tag, WASH_PRICES["washclusters"])
     return jsonify(out), code
 
+INTEGRITY = os.path.join(DATA_DIR, "integrity.json")
+
+def integrity_report():
+    try:
+        with open(INTEGRITY, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _integrity_card():
+    r = integrity_report()
+    if not r:
+        return ""
+    e = _html.escape
+    return (f'<div class="card"><div class="lbl">Payer integrity report</div><p><b>{e(r.get("headline", ""))}</b></p>'
+            f'<p class="mut">Every payer wallet of the top {r.get("scope", {}).get("merchants_analyzed", 0)} merchants traced to its funders, '
+            f'{r.get("window", {}).get("days", 30)}-day window to {e(str(r.get("window", {}).get("to", "")))}. Free.</p>'
+            f'<a class="btn" href="{e(PUBLIC_BASE)}/provenance/integrity">Read the report</a></div>')
+
+@app.route("/provenance/integrity")
+@app.route("/provenance/integrity.json")
+def provenance_integrity():
+    """FREE: where the challenge's money actually comes from, by payer class. Aggregate only; no merchant is named here."""
+    r = integrity_report()
+    if not r:
+        return jsonify({"error": "the integrity report is not published yet"}), 404
+    accept = request.headers.get("Accept") or ""
+    if request.path.endswith(".json") or request.args.get("format") == "json" or ("text/html" not in accept):
+        return jsonify(r)
+    e = _html.escape
+    rows = "".join(
+        f"<tr><td>{e(c['label'])}</td><td class=\"num\">{c['wallets']:,}</td><td class=\"num\">{c['settlements']:,}</td>"
+        f"<td class=\"num\">${c['usdc']:,.2f}</td><td class=\"num\"><b>{c['share_pct']:.2f}%</b></td></tr>"
+        for c in r.get("classes", []))
+    cav = "".join(f"<li>{e(x)}</li>" for x in r.get("caveats", []))
+    sc = r.get("scope", {}); w = r.get("window", {}); m = r.get("method", {}); op = r.get("this_operator", {})
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Provenance - payer integrity report</title><meta name="description" content="{e(r.get('headline', ''))}">
+<meta name="theme-color" content="#0a0e14"><style>{_RECEIPT_CSS}
+table.integ{{width:100%;border-collapse:collapse;margin-top:8px}} table.integ td,table.integ th{{padding:8px 6px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;font-size:14px}}
+table.integ td.num,table.integ th.num{{text-align:right;font-variant-numeric:tabular-nums}}</style></head><body><div class="wrap">
+<div class="lbl">Provenance · Algorand x402 Challenge</div>
+<h1>Where the leaderboard's money comes from</h1>
+<p class="lead">{e(r.get('headline', ''))}</p>
+<div class="tiles">
+ <div class="tile"><b>{sc.get('merchants_analyzed', 0)}</b><span>merchants analyzed</span></div>
+ <div class="tile"><b>{sc.get('distinct_payers', 0):,}</b><span>distinct payer wallets</span></div>
+ <div class="tile"><b>${sc.get('total_usdc', 0):,.0f}</b><span>USDC in {w.get('days', 30)} days</span></div>
+ <div class="tile"><b>{sc.get('total_settlements', 0):,}</b><span>transfers traced</span></div>
+</div>
+<div class="card"><div class="lbl">Volume by payer class · {e(str(w.get('from', '')))} to {e(str(w.get('to', '')))}</div>
+<table class="integ"><thead><tr><th>Payer class</th><th class="num">Wallets</th><th class="num">Transfers</th><th class="num">USDC</th><th class="num">Share</th></tr></thead><tbody>{rows}</tbody></table>
+<p class="mut" style="margin-top:12px">{e(sc.get('note', ''))}. No merchant is named in this report; per-merchant grades are the paid products below.</p></div>
+<div class="card"><div class="lbl">Method</div><p>{e(m.get('summary', ''))}</p><p class="mut">Version {e(str(m.get('version', '')))} · <a href="{e(m.get('url', ''))}">methodology</a></p></div>
+<div class="card"><div class="lbl">Our own entry</div><p><b>Grade {e(str(op.get('grade', '')))}</b>. {e(op.get('statement', ''))}</p></div>
+<div class="card"><div class="lbl">Caveats</div><ul class="ul">{cav}</ul></div>
+<div class="card"><div class="lbl">Per-merchant detail</div><p>Every graded merchant, A to F, with indicators and top payers: <a href="{e(PUBLIC_BASE)}/commission/washreport">full report</a> ({e(WASH_PRICES['washreport'])}). Check one merchant before you pay it: <a href="{e(PUBLIC_BASE)}/commission/washcheck">washcheck</a> ({e(WASH_PRICES['washcheck'])}; first call free with ?trial=1). Machine-readable copy of this page: <a href="{e(PUBLIC_BASE)}/provenance/integrity.json">integrity.json</a>.</p></div>
+<p class="mut" style="font-size:13px">Published by Apeiron Capital Inc. Statistical estimates from public data, not findings about any operator's intent. As of {e(str(r.get('as_of', '')))}.</p>
+</div></body></html>"""
+    return Response(page, mimetype="text/html")
+
 @app.route("/provenance")
 @app.route("/provenance/")
 def provenance_page():
@@ -2542,6 +2603,7 @@ def provenance_page():
 <div class="card"><div class="lbl">Grade distribution</div><div class="chips">{chips}</div>
 <p class="mut" style="margin-top:12px">{e(rep.get('scope', ''))}. The percentage is volume-weighted: the share of claimed challenge volume that the model does not attribute to independent, multi-party demand.</p></div>
 {mine}
+{_integrity_card()}
 <div class="card"><div class="lbl">Get the detail</div><div class="minis">
 {buy('/commission/washreport', 'Full report', WASH_PRICES['washreport'], 'Every graded merchant: score, claimed vs organic-adjusted volume, top indicators.')}
 {buy('/commission/washcheck', 'Check one merchant', WASH_PRICES['washcheck'], 'Grade any Algorand payTo before you pay it (add ?payTo=).')}
