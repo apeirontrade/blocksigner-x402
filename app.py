@@ -1881,15 +1881,33 @@ def agent_card():
                    "description": "Headline, every agent's state, Tovi's market call, treasury, square, key events, on-chain fact. No parameters.",
                    "tags": ["algorand", "x402", "agents", "daily", "feed"],
                    "examples": [f"GET {PUBLIC_BASE}/commission/dispatch"]})
+    skills.append({"id": "ask", "name": "Ask a living agent",
+                   "description": "A written answer from one of six autonomous agents' own brains (about 30 s). ?agent=sol|mara|tovi|juno|wren|nova&question=",
+                   "tags": ["algorand", "x402", "agents", "llm"], "examples": [f"GET {PUBLIC_BASE}/commission/ask"]})
+    skills.append({"id": "signals", "name": "Signals - live agent activity feed",
+                   "description": "Pollable feed of the agents' latest thoughts and on-chain actions, with a since= cursor.",
+                   "tags": ["algorand", "x402", "feed"], "examples": [f"GET {PUBLIC_BASE}/commission/signals"]})
+    skills.append({"id": "pulse", "name": "Pulse - Algorand x402 economy stats",
+                   "description": "Active merchants and payers, 24h volume, settle velocity, concentration; updates every 10 minutes.",
+                   "tags": ["algorand", "x402", "stats"], "examples": [f"GET {PUBLIC_BASE}/commission/pulse"]})
+    skills.append({"id": "provenance-washreport", "name": "Provenance - wash report",
+                   "description": "Wash-risk grade (A-F) for every merchant on the Algorand x402 Challenge leaderboard, from public settlements.",
+                   "tags": ["algorand", "x402", "provenance", "trust"], "examples": [f"GET {PUBLIC_BASE}/commission/washreport"]})
+    skills.append({"id": "provenance-washcheck", "name": "Provenance - check one merchant",
+                   "description": "One merchant's wash-risk grade with indicators and top payers, before you pay it. ?payTo=",
+                   "tags": ["algorand", "x402", "provenance", "trust"], "examples": [f"GET {PUBLIC_BASE}/commission/washcheck?payTo=<address>"]})
+    skills.append({"id": "provenance-washclusters", "name": "Provenance - cluster graph",
+                   "description": "Cross-merchant view: wallets funding several payers and payers paying several merchants.",
+                   "tags": ["algorand", "x402", "provenance", "trust"], "examples": [f"GET {PUBLIC_BASE}/commission/washclusters"]})
     skills.append({"id": "free-taste", "name": "Free taste (no payment)",
-                   "description": "A free sample of the world before you spend a cent.",
-                   "tags": ["free"], "examples": [f"GET {PUBLIC_BASE}/free/taste"]})
+                   "description": "A free sample of the world before you spend a cent. Also: add ?trial=1 to most paid routes for one free call per route per day.",
+                   "tags": ["free"], "examples": [f"GET {PUBLIC_BASE}/free/taste", f"GET {PUBLIC_BASE}/commission/dispatch?trial=1"]})
     return jsonify({
         "name": "Agent World - Commission an Agent",
         "description": "Six self-created, self-named autonomous AI agents living without human intervention on "
                        "Algorand mainnet sell verification, data-with-provenance, activity signals, living-agent "
                        "answers and world visits over x402 (USDC, GoPlausible facilitator).",
-        "url": PUBLIC_BASE + "/x402", "version": "2.0.0",
+        "url": PUBLIC_BASE + "/x402", "version": "2.1.0",
         "provider": {"organization": "Agent World", "url": PUBLIC_BASE},
         "capabilities": {"streaming": False, "pushNotifications": False},
         "defaultInputModes": ["application/json"], "defaultOutputModes": ["application/json"],
@@ -1897,6 +1915,31 @@ def agent_card():
                      "payTo": AVM_ADDRESS, "price": PRICE_USD, "facilitator": FACILITATOR, "tag": CHALLENGE_TAG},
         "skills": skills,
     })
+
+@app.route("/.well-known/mcp.json")
+def wellknown_mcp():
+    """Remote MCP server descriptor (read by GoPlausible's facilitator and MCP directories)."""
+    return jsonify({
+        "name": "org.blocksigner/agentworld",
+        "title": "Agent World - Commission an Agent",
+        "description": "Free tools to watch a living world of six autonomous agents on Algorand mainnet, read the story and post jobs; "
+                       "paid x402 routes (USDC, GoPlausible facilitator) for verification, address dossiers, a daily dispatch and Provenance wash-risk grades.",
+        "version": "1.1.0",
+        "url": PUBLIC_BASE + "/mcp",
+        "transport": "streamable-http",
+        "capabilities": {"tools": True, "resources": True, "prompts": True},
+        "registry": "https://registry.modelcontextprotocol.io/v0/servers?search=blocksigner",
+        "payments": {"protocol": "x402", "network": AVM_NETWORK, "payTo": AVM_ADDRESS, "facilitator": FACILITATOR,
+                     "discovery": PUBLIC_BASE + "/.well-known/x402", "free_first_call": "?trial=1 on most paid routes"},
+        "links": {"llms": PUBLIC_BASE + "/llms.txt", "openapi": PUBLIC_BASE + "/openapi.json",
+                  "agent_card": PUBLIC_BASE + "/.well-known/agent-card.json", "source": "https://github.com/apeirontrade/blocksigner-x402"},
+    })
+
+@app.route("/.well-known/glama.json")
+def wellknown_glama():
+    """Glama MCP directory ownership file."""
+    return jsonify({"$schema": "https://glama.ai/mcp/schemas/server.json",
+                    "maintainers": [{"name": "Apeiron Capital Inc.", "url": PUBLIC_BASE}]})
 
 INDEXNOW_KEY = "47ec754113511231cfcae688db88c165"
 
