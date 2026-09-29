@@ -5,18 +5,77 @@ blocksigner.org {
 		format json
 	}
 	# ---- x402 app (Flask :8402)
+	handle /privacy {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /terms {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /watch {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /watch/* {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /revshare {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /provenance {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /provenance/* {
+		reverse_proxy 127.0.0.1:8402
+	}
 	handle /commission/* {
+		header Access-Control-Expose-Headers "PAYMENT-REQUIRED, PAYMENT-RESPONSE, PAYMENT-SIGNATURE, X-Trial"
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Headers "PAYMENT-SIGNATURE, X-PAYMENT, Content-Type, Accept"
+		header Access-Control-Allow-Methods "GET, OPTIONS"
 		reverse_proxy 127.0.0.1:8402
 	}
 	handle /commission {
 		rewrite * /
 		reverse_proxy 127.0.0.1:8402
 	}
+	handle /duel/* {
+		reverse_proxy 127.0.0.1:8402
+	}
 	handle /visit/* {
 		reverse_proxy 127.0.0.1:8402
 	}
+	handle /free {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /free/* {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /asked {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /asked.json {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /mcp {
+		reverse_proxy 127.0.0.1:8403 {
+			header_up Host 127.0.0.1:8403
+		}
+	}
+	handle /mcp/* {
+		reverse_proxy 127.0.0.1:8403 {
+			header_up Host 127.0.0.1:8403
+		}
+	}
 	handle /x402 {
 		rewrite * /
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /openapi.json {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /favicon.ico {
+		reverse_proxy 127.0.0.1:8402
+	}
+	handle /episodes.rss {
 		reverse_proxy 127.0.0.1:8402
 	}
 	handle /x402.json {
@@ -39,6 +98,12 @@ blocksigner.org {
 	}
 	handle /47ec754113511231cfcae688db88c165.txt {
 		reverse_proxy 127.0.0.1:8402
+	}
+	handle /.well-known/mcp-registry-auth {
+		respond "v=MCPv1; k=ed25519; p=MKV0G7LpnOEt062ZHs3JcBYN7elRPPXU5RG68MMa1K8=" 200
+	}
+	handle /.well-known/agents.json {
+		reverse_proxy 127.0.0.1:8089
 	}
 	handle /.well-known/* {
 		reverse_proxy 127.0.0.1:8402

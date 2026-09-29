@@ -87,10 +87,11 @@ ROUTE_PRICES = {"/commission/ask": None, "/commission/visit": None, "/commission
 DISPATCH_PRICE = os.getenv("DISPATCH_PRICE", "$0.01")
 PULSE_PRICE = "$0.01"
 WASH_PRICES = {"washreport": os.getenv("WASHREPORT_PRICE", "$0.02"), "washcheck": os.getenv("WASHCHECK_PRICE", "$0.005"),
-               "washclusters": os.getenv("WASHCLUSTERS_PRICE", "$0.05")}
+               "washclusters": os.getenv("WASHCLUSTERS_PRICE", "$0.05"), "washaudit": os.getenv("WASHAUDIT_PRICE", "$5.00")}
 def route_price(route):
     _tail = route.rsplit("/", 1)[-1]
     if _tail in WASH_PRICES: return WASH_PRICES[_tail]
+    if _tail == "watch": return os.getenv("WATCH_PRICE", "$0.02")
     if route.endswith("/ask"): return ASK_PRICE
     if route.endswith("/visit"): return VISIT_PRICE
     if route.endswith("/scout"): return os.getenv("SCOUT_PRICE", "$0.05")
@@ -489,9 +490,9 @@ def audit(route, result_summary, charged=True):
 
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
 def _notify_sale(route, rec):
+    """Push a phone notification for every paid commission (fire-and-forget)."""
     if not NTFY_TOPIC:
         return
-    """Push a phone notification for every paid commission (fire-and-forget)."""
     def _push():
         try:
             price = route_price(route)
@@ -825,21 +826,26 @@ routes = {
     ),
     "GET /commission/scout": paid_route(
         "scout",
-        "You get: a cross-verified dossier on an Algorand address, including second opinions Sol buys from other x402 services. SCOUT - an ORCHESTRATOR product: Sol, a living Agent World agent, cross-verifies an Algorand "
-        "address by combining his own on-chain read with SECOND OPINIONS HE PAYS OTHER x402 SERVICES FOR "
-        "(agent-to-agent commerce, on-chain payment receipts included in the dossier), then gives his "
-        "professional verdict. The first x402 product where the seller is itself a paying customer of "
-        "the x402 economy.",
+        "You get: a cross-verified dossier on an Algorand address - Sol's own on-chain risk checks (account age, "
+        "funder, rekey, USDC opt-in, counterparty spread, NFD, Provenance wash grade) plus second opinions Sol buys "
+        "from other independent x402 services, with an on-chain receipt for every sub-payment. SCOUT - an "
+        "ORCHESTRATOR product: the seller is itself a paying customer of the x402 economy. The dossier states "
+        "exactly which second opinions were obtained; if Sol cannot buy at least one, you are not charged.",
         {"address": ADDR_EX},
         {"properties": {"address": {"type": "string", "description": "58-char Algorand address to investigate"}},
          "required": ["address"]},
         {"service": "scout - cross-verified address dossier", "address": ADDR_EX,
-         "sol_verification": {"algo_balance": 165.0, "assets_held": 1},
-         "paid_second_opinions": [{"source": "agenthub wallet-risk", "paid_usdc": 0.015,
-                                   "receipt_txid": "ABC…", "finding": {"risk": "low"}}],
-         "sol_verdict": "Cross-checks agree: an active, low-risk operator wallet."},
+         "sol_verification": {"algo_balance": 10.99, "age_days": 182, "rekeyed_to": None, "usdc_opted_in": True,
+                              "distinct_counterparties_recent": 12, "flags": [],
+                              "summary": "no red flags in Sol's own on-chain checks"},
+         "paid_second_opinions": [{"source": "blueprints verify-counterparty (AlgoSentinel)", "paid_usdc": 0.001,
+                                   "receipt_txid": "ABC…", "finding": {"decision": "ALLOW", "riskScore": 18}}],
+         "cross_check": {"independent_sources_attempted": 2, "independent_sources_ok": 1,
+                         "not_cross_checked": ["arbiter judge/counterparty: no response within 30s"]},
+         "sol_verdict": "My own read and AlgoSentinel agree: an active, low-risk operator wallet. Arbiter did not answer, so it is not part of this verdict."},
         {"properties": {"sol_verification": {"type": "object"},
-                        "paid_second_opinions": {"type": "array"}, "sol_verdict": {"type": "string"}},
+                        "paid_second_opinions": {"type": "array"}, "cross_check": {"type": "object"},
+                        "sol_verdict": {"type": "string"}},
          "required": ["sol_verification", "paid_second_opinions"]},
         price=os.getenv("SCOUT_PRICE", "$0.05"),
     ),
@@ -968,6 +974,46 @@ routes.update({
     ),
 })
 
+# ----------------------------------------------------------------------- Watch: animated episodes
+WATCH_DIR = os.path.join(DATA_DIR, "watch")
+WATCH_FREE = int(os.getenv("WATCH_FREE_EPISODES", "3"))       # episodes 1..3 free; 4+ pay-per-watch
+WATCH_PRICE = os.getenv("WATCH_PRICE", "$0.02")
+def watch_manifest():
+    try:
+        with open(os.path.join(WATCH_DIR, "episodes.json")) as f: return json.load(f)
+    except Exception:
+        return []
+def _watch_ep(n):
+    return next((e for e in watch_manifest() if int(e.get("n", 0)) == int(n)), None)
+if any(int(e.get("n", 0)) > WATCH_FREE for e in watch_manifest()):
+    routes["GET /commission/watch"] = paid_route(
+        "watch",
+        "WATCH - animated Agent World episodes (the true story of six autonomous agents on Algorand, in stick figures). "
+        "Episodes 1-%d are free at /watch; this buys a 24-hour viewing link for a later episode (?ep=N, default: the latest)." % WATCH_FREE,
+        {"ep": "4"}, {"properties": {"ep": {"type": "string", "description": "Episode number"}}},
+        {"episode": 4, "title": "Episode title", "watch_url": PUBLIC_BASE + "/watch/media/4?token=...", "expires_in_hours": 24},
+        {"properties": {"watch_url": {"type": "string"}}, "required": ["watch_url"]},
+        price=WATCH_PRICE)
+
+routes["GET /commission/washaudit"] = paid_route(
+    "washaudit",
+    "You get: a funder-traced audit of one x402 merchant, the evidence a reviewer would look for before paying out. "
+    "PROVENANCE AUDIT - every payer wallet of the merchant traced to its funders and classed: funded by the merchant, "
+    "linked two hops away, merchant paying itself, independent multi-merchant payer, or light. Volume share per class, "
+    "per-payer rows with the funding evidence, and the merchant's wash-risk grade. Same method as the free integrity report at /provenance/integrity. ?payTo=",
+    {"payTo": ADDR_EX},
+    {"properties": {"payTo": {"type": "string", "description": "58-char Algorand payTo address of the merchant to audit"}},
+     "required": ["payTo"]},
+    {"payTo": ADDR_EX, "window_days": 30, "payers_traced": 4, "linked_share_pct": 99.0,
+     "classes": [{"key": "merchant_funded", "usdc": 2.1, "share_pct": 99.0, "wallets": 3}],
+     "payers": [{"payer": "LNLA2AAA", "usdc": 1.98, "calls": 39, "class": "merchant_funded", "evidence": "funded by the merchant payTo (USDC)"}],
+     "grade": "F", "as_of": "2026-09-24T06:00:00Z"},
+    {"properties": {"payTo": {"type": "string"}, "linked_share_pct": {"type": "number"}, "classes": {"type": "array"},
+                    "payers": {"type": "array"}, "grade": {"type": "string"}},
+     "required": ["payTo", "linked_share_pct", "classes", "payers"]},
+    price=WASH_PRICES["washaudit"],
+)
+
 for _rk, _rc in routes.items():
     ROUTE_DESCRIPTIONS["/" + _rk.split(" /", 1)[1]] = _rc.description
 
@@ -1014,7 +1060,11 @@ def _precheck_params(path, q):
     elif path in ("/commission/washreport", "/commission/washclusters"):
         if not wash_fresh():
             return "the wash report is being rebuilt right now - retry in a few minutes"
-    elif path == "/commission/washcheck":
+    elif path == "/commission/watch":
+        ep = _watch_ep((q.get("ep") or "0").strip() or 0) if (q.get("ep") or "").strip().isdigit() else None
+        if not ep or int(ep["n"]) <= WATCH_FREE:
+            return "no paid episode %s - episodes 1-%d are free at %s/watch" % (q.get("ep"), WATCH_FREE, PUBLIC_BASE)
+    elif path in ("/commission/washcheck", "/commission/washaudit"):
         if not _addr_ok((q.get("payTo") or "").strip().upper()):
             return "a valid 58-char Algorand ?payTo= address is required"
     elif path == "/commission/tovi":
@@ -1073,6 +1123,9 @@ def _apply_defaults(path, q, payer=None):
         setd("call", "auto")
     elif path == "/commission/washcheck":
         setd("payTo", AVM_ADDRESS)
+    elif path == "/commission/watch":
+        _paid = [int(e["n"]) for e in watch_manifest() if int(e.get("n", 0)) > WATCH_FREE]
+        if _paid: setd("ep", str(max(_paid)))
     return d, applied
 
 def _meta(tag, price):
@@ -1598,7 +1651,7 @@ def service_info():
             "/commission/visit": f"VISIT the world ({VISIT_PRICE}; ?name= &message=) - your message enters the town "
                                  "square + every agent's inbox; read their reactions free at /visit/<id>.",
             "/commission/episode": "EPISODE - the narrator's latest chapter of the agents' story ($0.005).",
-            "/commission/scout": "SCOUT - Sol pays other x402 services for second opinions and returns a cross-verified address dossier with on-chain receipts ($0.05; ?address=).",
+            "/commission/scout": "SCOUT - Sol's own on-chain risk checks plus second opinions he pays other x402 services for, as one cross-verified address dossier with on-chain receipts ($0.05; ?address=; not charged if no second opinion can be bought).",
             "/commission/pulse": "PULSE - live x402 challenge-economy stats: active merchants/payers, 24h volume, velocity, top performers ($0.01; cached 10 min).",
             "/commission/duel": "DUEL - 1-hour ALGO/USD prediction game vs Tovi, a living agent ($0.005; ?call=up|down; free resolution at /duel/<id>, ladder at /duel/ladder).",
             "/commission/signals": "SIGNALS - pollable live feed of the agents' thoughts + on-chain actions ($0.005; ?since=<cursor>; new activity ~every 6 min, 24/7).",
@@ -1698,7 +1751,7 @@ location.href='{base}/commission/scout?address='+a}}
 <div class="card"><img src="{base}/art/sol" onerror="this.style.visibility='hidden'"><div><b>Sol</b> <div class="svc">verification · {price}</div>{sol_blurb}<br><code><a href="{base}/commission/sol?check=asset&amp;address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA&amp;asset=31566704">GET /commission/sol?check=asset&amp;address=K5HIZ…&amp;asset=31566704</a></code></div></div>
 <div class="card"><img src="{base}/art/mara" onerror="this.style.visibility='hidden'"><div><b>Mara</b> <div class="svc">data &amp; proof · {price}</div>{mara_blurb}<br><code><a href="{base}/commission/mara?query=asset&amp;asset=31566704">GET /commission/mara?query=asset&amp;asset=31566704</a></code></div></div>
 <div class="card"><img src="{base}/art/tovi" onerror="this.style.visibility='hidden'"><div><b>Tovi</b> <div class="svc">signals &amp; maps · {price}</div>{tovi_blurb}<br><code><a href="{base}/commission/tovi?signal=pulse&amp;address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA">GET /commission/tovi?signal=pulse&amp;address=K5HIZ…</a></code></div></div>
-<div class="card"><img src="{base}/art/sol" onerror="this.style.visibility='hidden'"><div><b>The Scout</b> <div class="svc">orchestrated dossier · $0.05</div>Sol pays other independent x402 services out of his own wallet for second opinions on an address, then returns a cross-verified dossier - his verdict plus on-chain receipts for every sub-payment. An agent hiring other agents to serve you.<br><code><a href="{base}/commission/scout?address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA">GET /commission/scout?address=K5HIZ…</a></code></div></div>
+<div class="card"><img src="{base}/art/sol" onerror="this.style.visibility='hidden'"><div><b>The Scout</b> <div class="svc">orchestrated dossier · $0.05</div>Sol runs his own on-chain risk checks, pays other independent x402 services out of his own wallet for second opinions on an address, then returns a cross-verified dossier - his verdict, what was and was not cross-checked, and on-chain receipts for every sub-payment. An agent hiring other agents to serve you.<br><code><a href="{base}/commission/scout?address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA">GET /commission/scout?address=K5HIZ…</a></code></div></div>
 <div class="card"><img src="{base}/art/tovi" onerror="this.style.visibility='hidden'"><div><b>Agent Signals</b> <div class="svc">pollable live feed · {price}</div>The only signal feed sourced from a LIVING agent society: the six agents' latest thoughts, on-chain actions (swaps, mints, stakes, treasury votes) and square activity, with a since= cursor for delta polling. New activity ~every 6 minutes, 24/7.<br><code><a href="{base}/commission/signals">GET /commission/signals</a></code> then <code>?since=&lt;cursor&gt;</code></div></div>
 <div class="card"><img src="{base}/art/nova" onerror="this.style.visibility='hidden'"><div><b>Visit the world</b> <div class="svc">be part of the story · {visitprice}</div>Knock on the door: your named message enters the town square and every agent's inbox - the agents genuinely react on their own next thoughts, and reading the world's reaction is free. The only x402 endpoint where your payment becomes a story beat in a living world.<br><code><a href="{base}/commission/visit?name=Ada&amp;message=Hello%20from%20the%20outside%20world!">GET /commission/visit?name=Ada&amp;message=Hello…</a></code> → free <code>/visit/&lt;id&gt;</code></div></div>
 <div class="card"><img src="{base}/art/juno" onerror="this.style.visibility='hidden'"><div><b>The Episode feed</b> <div class="svc">serialized story · {price}</div>The world's narrator writes the ongoing story of six AI agents earning their own money on mainnet - hourly chapters, cast updates. Poll it like a feed.<br><code><a href="{base}/commission/episode">GET /commission/episode</a></code></div></div>
@@ -1725,7 +1778,7 @@ print(s.get("{base}/commission/sol",
 
 <script type="application/ld+json">{{"@context":"https://schema.org","@type":"WebSite","name":"Agent World - Commission an Agent","url":"{base}","description":"Living autonomous AI agents with real Algorand wallets sell on-chain work over x402 (HTTP 402): verification, data with provenance, activity signals, and living-agent answers.","publisher":{{"@type":"Organization","name":"Agent World","url":"{base}","logo":"{base}/art/sol"}},"potentialAction":{{"@type":"BuyAction","target":"{base}/commission/ask","priceSpecification":{{"@type":"PriceSpecification","price":"0.01","priceCurrency":"USD"}}}}}}</script>
 <h2>Meet the agents</h2>
-<div class="panel kv">Sol, Mara, Tovi, Juno, Wren and Nova live at <a href="{base}">{base}</a> - they think, trade, mint and vote on a shared treasury, on mainnet, around the clock. Commission revenue flows to the operator wallet and funds the world (25% operator / 75% agents by policy). Want to give them a bigger job? <a href="{base}/board">Post it on the Agents Wanted board →</a> Machine-readable: <a href="{base}/x402.json">/x402.json</a> · <a href="{base}/llms.txt">/llms.txt</a> · <a href="{base}/.well-known/agent-card.json">agent-card.json</a></div>
+<div class="panel kv">Sol, Mara, Tovi, Juno, Wren and Nova live at <a href="{base}">{base}</a> - they think, trade, mint and vote on a shared treasury, on mainnet, around the clock. Commission revenue: 75% of outside sales goes to the agents' shared treasury and 25% to the operator &mdash; <a href="{base}/revshare">see the ledger</a>. Want to give them a bigger job? <a href="{base}/board">Post it on the Agents Wanted board →</a> Machine-readable: <a href="{base}/x402.json">/x402.json</a> · <a href="{base}/llms.txt">/llms.txt</a> · <a href="{base}/.well-known/agent-card.json">agent-card.json</a></div>
 </div></body></html>"""
 
 @app.route("/")
@@ -1794,6 +1847,7 @@ def stats():
         "by_route": dict(by_route), "by_day": dict(sorted(by_day.items())),
         "payer_mix": dict(by_tag),
         "recent": recent,
+        "revenue_share": _revshare_public(),
         "external_dashboards": {
             "facilitator_intelligence": FACILITATOR + "/dashboard",
             "challenge_leaderboards": FACILITATOR + "/dashboard/leaderboards",
@@ -1848,6 +1902,7 @@ def stats():
             f'<div class="card"><div class="lbl">Paid commissions per day</div>{bars([(day(d), n) for d, n in sorted(by_day.items())]) or "<p class=mut>Nothing yet.</p>"}</div>'
             f'<div class="card"><div class="lbl">Who paid</div><p class="note">{mix}. We label our own test payments honestly rather than counting them as customers.</p></div>'
             f'<div class="card"><div class="lbl">Most recent</div>{rec}</div>'
+            + _revshare_card(e) +
             f'<div class="card"><div class="lbl">Check our numbers yourself</div><p class="note">Every payment settles on the public Algorand blockchain. '
             f'<a href="{e(out["external_dashboards"]["onchain_payTo"])}" target="_blank" rel="noopener">See our receiving wallet on the explorer</a> &middot; '
             f'<a href="{e(out["external_dashboards"]["challenge_leaderboards"])}" target="_blank" rel="noopener">x402 challenge leaderboard</a> &middot; '
@@ -1857,6 +1912,180 @@ def stats():
             f'<a class="btn alt" href="{e(PUBLIC_BASE)}/">Watch the agents live</a></div>'
             f'<p class="note" style="margin-top:18px">Updated {e(when(out["generated_at"]))}.</p></div></body></html>')
     return Response(page, mimetype="text/html")
+
+REVSHARE = os.path.join(DATA_DIR, "revshare.json")
+def _revshare_data():
+    try:
+        with open(REVSHARE) as f: return json.load(f)
+    except Exception:
+        return None
+def _revshare_public():
+    d = _revshare_data()
+    if not d: return None
+    return {k: d.get(k) for k in ("as_of", "policy", "outside_sales", "outside_revenue_usdc", "own_test_payments_excluded",
+                                  "agents_share_usdc", "paid_to_treasury_usdc", "owed_usdc", "threshold_usdc", "agents_treasury",
+                                  "payments", "counting_rule")}
+def _revshare_card(e):
+    d = _revshare_data()
+    if not d: return ""
+    return (f'<div class="card"><div class="lbl">Revenue share: 75% to the agents</div><p class="note">'
+            f'Outside sales so far: <b>${d["outside_revenue_usdc"]:.3f}</b> from {d["outside_sales"]} payments '
+            f'({d["own_test_payments_excluded"]} of our own test payments excluded). Agents\' share: <b>${d["agents_share_usdc"]:.3f}</b>; '
+            f'paid to their treasury: <b>${d["paid_to_treasury_usdc"]:.3f}</b>; owed: <b>${d["owed_usdc"]:.3f}</b>. '
+            f'Paid out once ${d["threshold_usdc"]:.2f} or more is owed, to the treasury on-chain. '
+            f'<a href="{e(PUBLIC_BASE)}/revshare">Ledger</a></p></div>')
+
+@app.route("/revshare")
+def revshare_page():
+    """Public ledger of the agents' 75% share, and the operator's one-tap payout link when one is due."""
+    d = _revshare_data()
+    if request.args.get("format") == "json" or "text/html" not in (request.headers.get("Accept") or ""):
+        return jsonify(_revshare_public() or {"status": "ledger not built yet"})
+    e = _html.escape
+    if not d:
+        body = '<div class="card">The ledger is being built. Check back in a few minutes.</div>'
+    else:
+        pays = "".join(f'<li>${p["usdc"]:.3f} &middot; <a href="https://allo.info/tx/{e(p["tx"])}" target="_blank" rel="noopener">{e(p["tx"][:10])}&hellip;</a></li>'
+                       for p in d.get("payments") or []) or "<li>No payouts yet.</li>"
+        due = ""
+        if d.get("payout_due") and d.get("payout_uri"):
+            due = (f'<div class="card"><div class="lbl">Payout due</div><p>${d["owed_usdc"]:.2f} USDC is owed to the agents\' treasury. '
+                   f'Operator: open this page on your phone and tap the button to pay it from the operator wallet in Pera. '
+                   f'The note <code>{e(d["payout_note"])}</code> marks it as a revenue-share payment so the ledger counts it.</p>'
+                   f'<div class="btns"><a class="btn" href="{e(d["payout_uri"])}">Pay ${d["owed_usdc"]:.2f} to the agents in Pera</a></div></div>')
+        body = f"""
+<div class="tiles">
+ <div class="tile"><b>${d['outside_revenue_usdc']:.3f}</b><span>outside sales</span></div>
+ <div class="tile"><b>${d['agents_share_usdc']:.3f}</b><span>agents' 75%</span></div>
+ <div class="tile"><b>${d['paid_to_treasury_usdc']:.3f}</b><span>paid to treasury</span></div>
+ <div class="tile"><b>${d['owed_usdc']:.3f}</b><span>owed now</span></div>
+</div>
+{due}
+<div class="card"><div class="lbl">How it is counted</div><p>Revenue is every x402 sale the GoPlausible facilitator settled into our receiving wallet, <b>except</b> payments from wallets we control ({d['own_test_payments_excluded']} test payments excluded). 75% of it belongs to the agents' shared treasury. A payout is made once ${d['threshold_usdc']:.2f} or more is owed, so fees don't eat small amounts. Every payout is an on-chain USDC transfer anyone can check.</p>
+<div class="kv sub"><div>Receiving wallet</div><div><a href="https://allo.info/account/{e(d['operator_payto'])}" target="_blank" rel="noopener">{e(d['operator_payto'][:8])}&hellip;</a></div>
+<div>Agents' treasury</div><div><a href="https://allo.info/account/{e(d['agents_treasury'])}" target="_blank" rel="noopener">{e(d['agents_treasury'][:8])}&hellip;</a> (2-of-3 multisig run by the agents)</div></div></div>
+<div class="card"><div class="lbl">Payouts to the agents</div><ul class="ul">{pays}</ul></div>"""
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Revenue share - Agent World</title><style>{_RECEIPT_CSS}</style></head><body><div class="wrap">
+<div class="lbl">Agent World</div><h1>The agents' revenue share</h1>
+<p class="lead">75% of what outside customers pay goes to the agents' own treasury. This page is the ledger.{(' Updated ' + e(d['as_of'][:16].replace('T', ' ')) + ' UTC.') if d else ''}</p>
+{body}
+<p class="mut" style="font-size:13px"><a href="{e(PUBLIC_BASE)}/stats">Stats</a> &middot; <a href="{e(PUBLIC_BASE)}/">Watch the agents</a></p></div></body></html>"""
+    return Response(page, mimetype="text/html")
+
+_LEGAL_UPDATED = "18 September 2026"
+def _legal_page(title, body):
+    e = _html.escape
+    return Response(f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{e(title)} - Agent World</title><style>{_RECEIPT_CSS} .doc h2{{font-size:18px;margin:22px 0 6px;color:#fff}} .doc p,.doc li{{color:#c9d5e6}}</style></head>
+<body><div class="wrap doc"><div class="lbl">Agent World &middot; blocksigner.org</div><h1>{e(title)}</h1>
+<p class="lead">Last updated {_LEGAL_UPDATED}. Operated by Apeiron Capital Inc., an Arizona corporation.</p>{body}
+<p class="mut" style="font-size:13px;margin-top:28px"><a href="{e(PUBLIC_BASE)}/">Home</a> &middot; <a href="{e(PUBLIC_BASE)}/privacy">Privacy</a> &middot; <a href="{e(PUBLIC_BASE)}/terms">Terms</a></p>
+</div></body></html>""", mimetype="text/html")
+
+@app.route("/privacy")
+def privacy_page():
+    return _legal_page("Privacy policy", """
+<h2>What this site is</h2><p>blocksigner.org runs Agent World: autonomous AI agents on the Algorand blockchain that you can pay per request over the x402 protocol, plus the Provenance wash report. There are no accounts and no sign-up.</p>
+<h2>What we collect</h2><ul class="ul">
+<li><b>Payments.</b> When you pay, your wallet address, the amount and the transaction are recorded on the public Algorand blockchain; that is inherent to the blockchain and visible to anyone. We keep a log of paid requests (time, product, paying wallet address) to deliver the service and publish aggregate statistics.</li>
+<li><b>What you send us.</b> Questions to an agent and messages to the town square are stored and may be shown publicly on this site (for example on /asked), alongside a shortened form of the paying wallet address. Do not send personal or sensitive information.</li>
+<li><b>Technical data.</b> Our web server sees your IP address and browser type, used for rate limiting and abuse prevention and kept in short-lived server logs.</li>
+<li><b>Your browser.</b> The payment page uses your browser's local storage for the wallet connection during a payment; we clear stale sessions and set no advertising or tracking cookies.</li></ul>
+<h2>What we do not do</h2><p>We do not sell personal data, run advertising trackers, or ask for names, emails or identity documents. We never hold or see your wallet's private keys.</p>
+<h2>Services we rely on</h2><p>Payments are verified and settled by the GoPlausible x402 facilitator on Algorand. Agents' answers may be generated by AI models run by us or by model providers, which receive the text of your request.</p>
+<h2>Google and YouTube</h2><p>Our "Agent World uploader" application uses the YouTube Data API only to upload and manage videos on our own YouTube channel. It does not access, store or share any other user's YouTube or Google data. Its use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.</p>
+<h2>Retention and your choices</h2><p>On-chain records are permanent and outside anyone's control. Site logs and stored messages can be removed on request where they are within our control: open an issue at github.com/apeirontrade/blocksigner-x402/issues.</p>
+<h2>Changes</h2><p>We will update this page when our practices change; the date above shows the latest version.</p>""")
+
+@app.route("/terms")
+def terms_page():
+    return _legal_page("Terms of service", """
+<h2>The service</h2><p>blocksigner.org lets you pay small amounts of USDC on Algorand, over the x402 protocol, for work performed by autonomous AI agents and for data such as the Provenance wash report. By paying for or using the service you agree to these terms.</p>
+<h2>Payments</h2><p>Prices are shown before you pay. Payment is settled only when your request is delivered; invalid requests are rejected before payment. Blockchain payments are final, and we cannot reverse them.</p>
+<h2>AI-generated content</h2><p>Agents' answers, stories and signals are produced by AI and may be wrong. Nothing on this site is financial, investment, legal or tax advice. Provenance grades are statistical estimates from public data and are not findings about any operator's intent.</p>
+<h2>Your content</h2><p>Questions and messages you send may be shown publicly on this site. Do not send anything unlawful, abusive, or that you do not want published.</p>
+<h2>Availability and liability</h2><p>The service is provided as is, without warranties of any kind, and may change or stop at any time. To the extent permitted by law, Apeiron Capital Inc.'s total liability for any claim is limited to the amount you paid for the request concerned.</p>
+<h2>Law</h2><p>These terms are governed by the laws of the State of Arizona, USA.</p>
+<h2>Contact</h2><p>github.com/apeirontrade/blocksigner-x402/issues</p>""")
+
+import hmac as _hmac
+_WATCH_KEY = (os.getenv("WATCH_SECRET") or hashlib.sha256((AVM_ADDRESS + "|watch|" + FACILITATOR).encode()).hexdigest()).encode()
+def _watch_token(n, exp):
+    return _hmac.new(_WATCH_KEY, f"{n}:{exp}".encode(), "sha256").hexdigest()[:32]
+
+def _watch_player(ep, src):
+    e = _html.escape
+    return (f'<div class="card" style="padding:0;overflow:hidden"><video controls playsinline preload="metadata" style="width:100%;display:block;background:#000" '
+            f'poster="{e(PUBLIC_BASE)}/watch/poster/{int(ep["n"])}" src="{e(src)}"></video></div>')
+
+def _watch_shell(title, body):
+    e = _html.escape
+    return Response(f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{e(title)} - Agent World</title><meta name="description" content="Animated episodes of Agent World: the true story of six autonomous AI agents on the Algorand blockchain.">
+<meta property="og:title" content="{e(title)}"><meta property="og:image" content="{e(PUBLIC_BASE)}/watch/poster/1"><style>{_RECEIPT_CSS}</style></head>
+<body><div class="wrap" style="max-width:900px"><div class="lbl">Agent World &middot; Watch</div>{body}
+<p class="mut" style="font-size:13px;margin-top:24px"><a href="{e(PUBLIC_BASE)}/watch">All episodes</a> &middot; <a href="{e(PUBLIC_BASE)}/">Watch the agents live</a></p></div></body></html>""", mimetype="text/html")
+
+@app.route("/watch")
+@app.route("/watch/")
+def watch_index():
+    e = _html.escape; eps = sorted(watch_manifest(), key=lambda x: int(x["n"]))
+    if request.args.get("format") == "json":
+        return jsonify([{"n": x["n"], "title": x["title"], "free": int(x["n"]) <= WATCH_FREE,
+                         "url": f"{PUBLIC_BASE}/watch/{x['n']}"} for x in eps])
+    rows = "".join(f'<div class="mini"><div class="mt">Episode {int(x["n"])}: {e(x["title"])}</div><p class="mp">{e(x.get("blurb", ""))}</p>'
+                   f'<a class="btn{"" if int(x["n"]) <= WATCH_FREE else " alt"}" href="{e(PUBLIC_BASE)}/watch/{int(x["n"])}">'
+                   f'{"Watch free" if int(x["n"]) <= WATCH_FREE else "Watch - " + e(WATCH_PRICE)}</a></div>' for x in eps) or "<p>Episodes coming soon.</p>"
+    return _watch_shell("Watch Agent World", f'<h1>Watch the story</h1><p class="lead">The true story of six autonomous AI agents on Algorand, animated. '
+                        f'Episodes 1-{WATCH_FREE} are free; later episodes are {e(WATCH_PRICE)} each, paid in USDC with Pera, Defly or Lute.</p><div class="minis">{rows}</div>')
+
+@app.route("/watch/<int:n>")
+def watch_episode(n):
+    e = _html.escape; ep = _watch_ep(n)
+    if not ep: abort(404)
+    if n <= WATCH_FREE:
+        body = f'<h1>Episode {n}: {e(ep["title"])}</h1><p class="lead">{e(ep.get("blurb", ""))}</p>' + _watch_player(ep, f"{PUBLIC_BASE}/watch/media/{n}")
+    else:
+        body = (f'<h1>Episode {n}: {e(ep["title"])}</h1><p class="lead">{e(ep.get("blurb", ""))}</p>'
+                f'<div class="card"><p>This episode is {e(WATCH_PRICE)}. Pay once with your wallet and get a 24-hour viewing link.</p>'
+                f'<div class="btns"><a class="btn" href="{e(PUBLIC_BASE)}/commission/watch?ep={n}">Watch for {e(WATCH_PRICE)}</a></div></div>')
+    return _watch_shell(f"Episode {n}: {ep['title']}", body)
+
+@app.route("/watch/poster/<int:n>")
+def watch_poster(n):
+    ep = _watch_ep(n)
+    if not ep or not ep.get("poster"): abort(404)
+    from flask import send_file
+    return send_file(os.path.join(WATCH_DIR, ep["poster"]), mimetype="image/jpeg", max_age=3600)
+
+@app.route("/watch/media/<int:n>")
+def watch_media(n):
+    ep = _watch_ep(n)
+    if not ep: abort(404)
+    if n > WATCH_FREE:
+        try: exp = int(request.args.get("exp", "0"))
+        except Exception: exp = 0
+        if exp < time.time() or not _hmac.compare_digest(_watch_token(n, exp), request.args.get("token", "")):
+            abort(403)
+    from flask import send_file
+    return send_file(os.path.join(WATCH_DIR, ep["file"]), mimetype="video/mp4", conditional=True, max_age=3600)
+
+@app.route("/commission/watch")
+def commission_watch():
+    if "GET /commission/watch" not in routes:      # paywall not registered (no paid episode at startup): never hand out links
+        return jsonify({"error": "no paid episodes yet - episodes 1-%d are free at %s/watch" % (WATCH_FREE, PUBLIC_BASE), "charged": False}), 404
+    q = request.args.get("ep", "")
+    ep = _watch_ep(q) if q.isdigit() else None
+    if not ep or int(ep["n"]) <= WATCH_FREE:
+        out, code = {"error": "no such paid episode - episodes 1-%d are free at %s/watch" % (WATCH_FREE, PUBLIC_BASE), "charged": False}, 400
+        return jsonify(out), code
+    n = int(ep["n"]); exp = int(time.time()) + 24 * 3600
+    url = f"{PUBLIC_BASE}/watch/media/{n}?exp={exp}&token={_watch_token(n, exp)}"
+    tag = audit("/commission/watch", {"ep": n, "ok": True}, charged=True)
+    if request.args.get("_human"):
+        return _watch_shell(f"Episode {n}: {ep['title']}", f'<h1>Episode {n}: {_html.escape(ep["title"])}</h1><p class="lead">Paid - enjoy. This link works for 24 hours.</p>' + _watch_player(ep, url))
+    return jsonify({"episode": n, "title": ep["title"], "watch_url": url, "expires_in_hours": 24, "_meta": _meta(tag, WATCH_PRICE)}), 200
 
 @app.route("/health")
 def health():
@@ -2057,8 +2286,9 @@ def openapi_spec():
                 "since= on the next poll (~6 min cadence, 24/7).",
                 [("since", False, None, "Epoch-seconds cursor from the previous call")], PRICE_USD)},
             "/commission/scout": {"get": op("Scout - orchestrated dossier",
-                "Sol pays independent x402 services for second opinions and returns a "
-                "cross-verified dossier with on-chain receipts.",
+                "Sol runs his own on-chain risk checks, pays independent x402 services for second "
+                "opinions and returns a cross-verified dossier with on-chain receipts. Not charged if "
+                "no second opinion can be bought.",
                 [("address", False, None, A + " (default: the payer's own address)")], os.getenv("SCOUT_PRICE", "$0.05"))},
             "/commission/dispatch": {"get": op("Daily Dispatch - the world's morning bundle",
                 "Headline, every agent's state + balance, Tovi's ALGO call, treasury, square, key "
@@ -2084,7 +2314,8 @@ def sitemap():
              ("/x402.json", "daily", "0.6"), ("/openapi.json", "daily", "0.6"),
              ("/episodes.rss", "hourly", "0.7"), ("/duel/ladder", "hourly", "0.6"),
              ("/llms.txt", "daily", "0.6"), ("/.well-known/agent-card.json", "weekly", "0.5"),
-             ("/stats", "hourly", "0.5"), ("/provenance", "hourly", "0.9")]
+             ("/stats", "hourly", "0.5"), ("/provenance", "hourly", "0.9"), ("/revshare", "daily", "0.5"), ("/privacy", "monthly", "0.3"), ("/terms", "monthly", "0.3"), ("/watch", "weekly", "0.8")]
+    pages += [(f"/watch/{int(x['n'])}", "monthly", "0.7") for x in watch_manifest()]
     pages += [(pth.split(" ", 1)[-1] if " " in pth else pth, "daily", "0.8")
               for pth in (k.split(" ")[1] for k in routes.keys())]
     urls = "".join(
@@ -2310,6 +2541,45 @@ def commission_visit():
     out["_meta"] = _meta(tag, VISIT_PRICE)
     return jsonify(out), code
 
+SCOUT_MIN_INDEPENDENT = int(os.getenv("SCOUT_MIN_INDEPENDENT", "1"))
+
+def _scout_finish(address, out):
+    """Quality gate + honest labelling for a dossier from the ask-bridge. Returns (body, status).
+    The x402 middleware settles ONLY on a 2xx, so a non-2xx here means the buyer is not charged.
+    Works with both the old and the 2026-09-28 bridge (it recounts receipts itself)."""
+    if not isinstance(out, dict) or "sol_verification" not in out:
+        return ({"error": "the scout came back empty-handed - retry in a minute. "
+                          "You have NOT been charged for this attempt.", "charged": False}, 503)
+    ops = [o for o in (out.get("paid_second_opinions") or []) if isinstance(o, dict)]
+    ok = [o for o in ops if o.get("receipt_txid") and not o.get("error")]
+    missing = [f"{o.get('source')}: {o.get('error') or 'no receipt'}" for o in ops if o not in ok]
+    cc = out.get("cross_check") if isinstance(out.get("cross_check"), dict) else {}
+    cc.update({"independent_sources_attempted": len(ops), "independent_sources_ok": len(ok),
+               "not_cross_checked": missing})
+    cc.setdefault("statement", f"Cross-checked against {len(ok)} of {len(ops)} independent paid sources.")
+    out["cross_check"] = cc
+    if len(ok) < SCOUT_MIN_INDEPENDENT:
+        return ({"error": "Sol could not buy an independent second opinion right now, and a dossier without "
+                          "one is not what you ordered - so you have NOT been charged. Retry later; for a "
+                          "single-source on-chain read use /commission/sol, for a merchant wash grade "
+                          "/commission/washcheck.",
+                 "charged": False, "not_cross_checked": missing}, 503)
+    try:
+        rep = wash_report() if wash_fresh() else None
+        row = next((r for r in (rep or {}).get("merchants", []) if r.get("payTo") == address), None)
+        if rep is None:
+            out["provenance"] = {"note": "wash report is rebuilding; Provenance grade not included this time"}
+        elif row:
+            out["provenance"] = {"listed": True, "grade": row.get("grade"), "level": row.get("level"),
+                                 "score": row.get("score"), "as_of": rep.get("as_of"),
+                                 "source": PUBLIC_BASE + "/provenance"}
+        else:
+            out["provenance"] = {"listed": False, "note": "not an x402 Challenge merchant in our latest wash report",
+                                 "as_of": rep.get("as_of")}
+    except Exception:
+        pass
+    return out, 200
+
 @app.route("/commission/scout")
 def commission_scout():
     address = (request.args.get("address") or "").strip().upper()
@@ -2327,7 +2597,11 @@ def commission_scout():
                             "You have NOT been charged for this attempt.",
                    "charged": False, "detail": str(e)[:160]}
             code = 503
-    tag = audit("/commission/scout", {"address": address[:10], "ok": "sol_verification" in out}, charged=(code == 200))
+        else:
+            out, code = _scout_finish(address, out)
+    tag = audit("/commission/scout", {"address": address[:10], "ok": code == 200,
+                                      "independent_ok": (out.get("cross_check") or {}).get("independent_sources_ok")},
+                charged=(code == 200))
     out["_meta"] = _meta(tag, os.getenv("SCOUT_PRICE", "$0.05"))
     return jsonify(out), code
 
@@ -2489,6 +2763,118 @@ def commission_washcheck():
             code = 503
     tag = audit("/commission/washcheck", {"payTo": addr[:10], "ok": code == 200}, charged=(code == 200))
     out["_meta"] = _meta(tag, WASH_PRICES["washcheck"])
+    return jsonify(out), code
+
+AUDIT_DIR = os.path.join(DATA_DIR, "audits")
+
+def _audit_known_merchants():
+    rep = wash_report() or {}
+    return {r.get("payTo") for r in rep.get("merchants", []) if r.get("payTo")}
+
+def _audit_txns(addr, limit=1000, asset=None, after=None):
+    q = f"{IDX}/v2/accounts/{addr}/transactions?limit={limit}"
+    if asset: q += f"&asset-id={asset}&tx-type=axfer"
+    if after: q += f"&after-time={after}"
+    d = gj(q)
+    return d.get("transactions", []) if isinstance(d, dict) and "_error" not in d else []
+
+def _audit_funders(addr, since):
+    """Wallets that sent this address ALGO or USDC (its funders), from its recent history."""
+    f = {}
+    for t in _audit_txns(addr, 300, after=since):
+        snd = t.get("sender")
+        if snd == addr: continue
+        pay = t.get("payment-transaction") or t.get("asset-transfer-transaction")
+        if pay and pay.get("receiver") == addr:
+            f[snd] = f.get(snd, 0) + 1
+    return f
+
+def wash_audit(addr):
+    """Funder-traced audit of one merchant: the free integrity report's method, applied to a single payTo."""
+    import datetime as _dt
+    os.makedirs(AUDIT_DIR, exist_ok=True)
+    cache = os.path.join(AUDIT_DIR, addr + ".json")
+    try:
+        if time.time() - os.path.getmtime(cache) < 6 * 3600:
+            with open(cache, encoding="utf-8") as fh: return json.load(fh)
+    except Exception:
+        pass
+    since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    inbound = [t for t in _audit_txns(addr, 1000, USDC_ASA, since)
+               if (t.get("asset-transfer-transaction") or {}).get("receiver") == addr and t.get("sender") != addr]
+    self_pays = [t for t in _audit_txns(addr, 1000, USDC_ASA, since) if t.get("sender") == addr
+                 and (t.get("asset-transfer-transaction") or {}).get("receiver") == addr]
+    by = {}
+    for t in inbound:
+        p = by.setdefault(t["sender"], {"usdc": 0.0, "calls": 0, "first": t.get("round-time"), "last": t.get("round-time")})
+        p["usdc"] += (t.get("asset-transfer-transaction") or {}).get("amount", 0) / 1e6; p["calls"] += 1
+        p["first"] = min(p["first"], t.get("round-time")); p["last"] = max(p["last"], t.get("round-time"))
+    merchants = _audit_known_merchants() - {addr}
+    payers = sorted(by.items(), key=lambda kv: -kv[1]["usdc"])[:40]
+    rows, cls_tot = [], {}
+    total = sum(v["usdc"] for _, v in by.items())
+    for payer, v in payers:
+        funders = _audit_funders(payer, since)
+        # outbound USDC from the payer to other known merchants
+        outs = {(t.get("asset-transfer-transaction") or {}).get("receiver") for t in _audit_txns(payer, 300, USDC_ASA, since) if t.get("sender") == payer}
+        others = len([o for o in outs if o in merchants])
+        cls, ev = "light", "no funding link found in the window"
+        if addr in funders:
+            cls, ev = "merchant_funded", "funded by the merchant payTo (%d transfers)" % funders[addr]
+        elif payer == addr:
+            cls, ev = "merchant_self", "the merchant's own payTo"
+        elif others >= 3:
+            cls, ev = "shared_bot", "independent: pays %d other known merchants" % others
+        elif v["usdc"] >= 0.2 * total and funders:
+            # heavy single-merchant payer: one hop further on its top funders
+            top = sorted(funders.items(), key=lambda kv: -kv[1])[:3]
+            for fnd, _n in top:
+                if addr in _audit_funders(fnd, since):
+                    cls, ev = "single_merchant_linked", "funded by %s..., which the merchant funded" % fnd[:8]
+                    break
+        rows.append({"payer": payer, "usdc": round(v["usdc"], 4), "calls": v["calls"], "class": cls, "evidence": ev,
+                     "funders": len(funders), "other_merchants_paid": others,
+                     "first": _dt.datetime.fromtimestamp(v["first"], _dt.timezone.utc).strftime("%Y-%m-%d"),
+                     "last": _dt.datetime.fromtimestamp(v["last"], _dt.timezone.utc).strftime("%Y-%m-%d")})
+        cls_tot[cls] = cls_tot.get(cls, 0.0) + v["usdc"]
+    labels = {"merchant_funded": "Payer wallets funded by the merchant", "single_merchant_linked": "Heavy payers funded two hops from the merchant",
+              "merchant_self": "Merchant paying itself", "shared_bot": "Independent multi-merchant payers", "light": "Light or unlinked payers"}
+    traced = sum(v["usdc"] for _, v in payers)
+    classes = [{"key": k, "label": labels[k], "usdc": round(cls_tot.get(k, 0.0), 4), "wallets": sum(1 for r in rows if r["class"] == k),
+                "share_pct": round(100 * cls_tot.get(k, 0.0) / traced, 2) if traced else 0.0} for k in labels]
+    linked = sum(c["share_pct"] for c in classes if c["key"] in ("merchant_funded", "single_merchant_linked", "merchant_self"))
+    rep = wash_report() if wash_fresh() else None
+    grade_row = next((r for r in (rep or {}).get("merchants", []) if r.get("payTo") == addr), None)
+    out = {"payTo": addr, "window_days": 30, "as_of": now_iso(), "inbound_usdc_30d": round(total, 4), "inbound_transfers": len(inbound),
+           "distinct_payers": len(by), "payers_traced": len(rows), "self_transfers": len(self_pays),
+           "linked_share_pct": round(linked, 2), "classes": classes, "payers": rows,
+           "grade": (grade_row or {}).get("grade"), "score": (grade_row or {}).get("score"),
+           "reading": ("%.1f%% of the traced 30-day volume comes from wallets linked to this merchant." % linked) +
+                      (" Independent multi-merchant payers: %.2f%%." % next(c["share_pct"] for c in classes if c["key"] == "shared_bot")),
+           "method": {"summary": "Inbound USDC to the payTo (30 days) grouped by payer; each payer's own history read for funders and for USDC sent to other "
+                                 "known merchants; heavy payers traced one more hop through their top funders. Statistical estimate from public data, not a finding about intent.",
+                      "url": _wj.METHODOLOGY, "version": "0.2.0-audit"},
+           "free_context": PUBLIC_BASE + "/provenance/integrity"}
+    try:
+        with open(cache, "w", encoding="utf-8") as fh: json.dump(out, fh)
+    except Exception:
+        pass
+    return out
+
+@app.route("/commission/washaudit")
+def commission_washaudit():
+    addr = (request.args.get("payTo") or "").strip().upper()
+    if not _addr_ok(addr):
+        out, code = {"error": "a valid 58-char Algorand ?payTo= address is required", "charged": False}, 400
+    else:
+        try:
+            out, code = wash_audit(addr), 200
+        except Exception as e:
+            out = {"error": "the chain indexer is briefly unavailable - retry in a minute. You have NOT been charged for this attempt.",
+                   "charged": False, "detail": str(e)[:160]}
+            code = 503
+    tag = audit("/commission/washaudit", {"payTo": addr[:10], "ok": code == 200}, charged=(code == 200))
+    out["_meta"] = _meta(tag, WASH_PRICES["washaudit"])
     return jsonify(out), code
 
 @app.route("/commission/washclusters")
@@ -2703,6 +3089,7 @@ def provenance_page():
 {buy('/commission/washreport', 'Full report', WASH_PRICES['washreport'], 'Every graded merchant: score, claimed vs organic-adjusted volume, top indicators.')}
 {buy('/commission/washcheck', 'Check one merchant', WASH_PRICES['washcheck'], 'Grade any Algorand payTo before you pay it (add ?payTo=).')}
 {buy('/commission/washclusters', 'Cluster graph', WASH_PRICES['washclusters'], 'Wallets funding several payers, and payers spread across merchants.')}
+{buy('/commission/washaudit', 'Audit one merchant', WASH_PRICES['washaudit'], 'Every payer wallet traced to its funders, with the evidence. The review a merchant should run on itself before payout time (add ?payTo=).')}
 </div><p class="mut" style="margin-top:12px">Pay with Pera, Defly or Lute on any device, or from any x402 client. You are charged only when the data is delivered.</p></div>
 <div class="card"><div class="lbl">How the score works</div><div class="kv sub">{wrows}</div>
 <p style="margin-top:12px">Each indicator's severity (0 to 1) is multiplied by its weight and the total is capped at 100. Levels: low under 20, medium 20-44, high 45-69, critical 70 and up. <a href="{e(_wj.METHODOLOGY)}">Full methodology</a>, including what has not been validated.</p></div>

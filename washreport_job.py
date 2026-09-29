@@ -253,3 +253,9 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # after each rebuild, refresh the free payer-integrity report from the new grades (best effort)
+    try:
+        import subprocess, sys as _sys
+        subprocess.run([_sys.executable, "/opt/x402/integrity_job.py"], timeout=1700, check=False)
+    except Exception as _e:
+        print("integrity refresh skipped:", _e)
