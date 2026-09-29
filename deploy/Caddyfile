@@ -108,6 +108,22 @@ blocksigner.org {
 	handle /.well-known/* {
 		reverse_proxy 127.0.0.1:8402
 	}
+	# ---- public log ledger (static, read-only): daily day files + index, anchored on Algorand
+	handle /ledger {
+		redir * /ledger/ 308
+	}
+	handle_path /ledger/* {
+		root * /srv/aw-ledger/public
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header X-Content-Type-Options "nosniff"
+		header Access-Control-Allow-Origin "*"
+		header Cache-Control "public, max-age=300"
+		@jsonl path *.jsonl
+		header @jsonl Content-Type "text/plain; charset=utf-8"
+		@hidden path */.* *.tmp
+		respond @hidden 404
+		file_server
+	}
 	# ---- public read-only Control Room (:8089) — write routes blocked
 	handle /api/say {
 		respond "this public view is read-only" 403

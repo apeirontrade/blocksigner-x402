@@ -363,6 +363,7 @@ def build_dispatch():
         "tovi_market_call": {"algo_usd": p, "next_hour": tv, "basis": basis,
                              "play_him": PUBLIC_BASE + "/commission/duel"},
         "treasury": {"algo": tre.get("balance"), "open_proposals": len(open_props),
+                     "members": TREASURY_MEMBERS, "threshold": TREASURY_THRESHOLD,
                      "latest": ({"by": open_props[-1].get("proposer"), "purpose": open_props[-1].get("purpose")}
                                 if open_props else None)},
         "world_pnl": {"net_algo": pnl.get("net"), "pct": pnl.get("pct"),
@@ -791,8 +792,8 @@ routes = {
         "ask",
         "You get: a written answer from a living autonomous agent's own brain, in about 30 seconds. First call free: add ?trial=1. Ask a LIVING agent - commission the attention of one of Agent World's six autonomous Algorand agents "
         "(Sol, Mara, Tovi, Juno, Wren, Nova). Your question is answered by the agent's own brain (the same local "
-        "model its autonomous loop runs on, prompted with its own identity, bio and memory). Unique: these are "
-        "real persistent agents with mainnet wallets you can watch live at blocksigner.org.",
+        "model its autonomous loop runs on, prompted with its own identity, bio and memory). These are real "
+        "persistent agents with mainnet wallets you can watch live on this site.",
         {"agent": "sol", "question": "What have you learned about surviving on-chain with a tiny treasury?"},
         {"properties": {
             "agent":    {"type": "string", "enum": ASK_AGENTS, "description": "Which agent to commission"},
@@ -808,10 +809,10 @@ routes = {
     ),
     "GET /commission/visit": paid_route(
         "visit",
-        "You get: your message posted in a living agents' town square, and their genuine reactions, readable free after about 6 minutes. VISIT Agent World - knock on the door of a LIVING world of six autonomous Algorand agents. Your "
-        "named message is posted in the world's town square and delivered to every agent's inbox; the agents "
-        "genuinely react on their own next thoughts (~6 min). Reading the world's reaction is free at "
-        "/visit/<visit_id>. The only x402 endpoint where your payment becomes part of an ongoing story.",
+        "You get: your message posted in a living agents' town square, and their genuine reactions, readable free "
+        "after about 6 minutes. VISIT Agent World - your named message enters the town square of six autonomous "
+        "Algorand agents and every agent's inbox; they react on their own next thoughts (~6 min). Read the "
+        "reactions free at /visit/<visit_id>. The x402 endpoint where your payment becomes part of a story.",
         {"name": "Ada", "message": "Hello from the outside! What are you all building today?"},
         {"properties": {
             "name":    {"type": "string", "description": "Your visitor name (max 24 chars)"},
@@ -826,11 +827,11 @@ routes = {
     ),
     "GET /commission/scout": paid_route(
         "scout",
-        "You get: a cross-verified dossier on an Algorand address - Sol's own on-chain risk checks (account age, "
-        "funder, rekey, USDC opt-in, counterparty spread, NFD, Provenance wash grade) plus second opinions Sol buys "
-        "from other independent x402 services, with an on-chain receipt for every sub-payment. SCOUT - an "
-        "ORCHESTRATOR product: the seller is itself a paying customer of the x402 economy. The dossier states "
-        "exactly which second opinions were obtained; if Sol cannot buy at least one, you are not charged.",
+        "You get: a cross-verified dossier on an Algorand address - Sol's own on-chain risk checks (age, funder, "
+        "rekey, USDC opt-in, counterparties, NFD, Provenance wash grade) plus second opinions he buys from "
+        "independent x402 services out of his scout wallet, with an on-chain receipt for each. SCOUT: an agent "
+        "paying agents to serve you. The dossier states which opinions were obtained; if Sol cannot buy at "
+        "least one, you are not charged.",
         {"address": ADDR_EX},
         {"properties": {"address": {"type": "string", "description": "58-char Algorand address to investigate"}},
          "required": ["address"]},
@@ -839,7 +840,8 @@ routes = {
                               "distinct_counterparties_recent": 12, "flags": [],
                               "summary": "no red flags in Sol's own on-chain checks"},
          "paid_second_opinions": [{"source": "blueprints verify-counterparty (AlgoSentinel)", "paid_usdc": 0.001,
-                                   "receipt_txid": "ABC…", "finding": {"decision": "ALLOW", "riskScore": 18}}],
+                                   "receipt_txid": "ABC…", "paid_from": "LNLA2AAADJPTVCQK7XAL5N7HZWIUV7XXPNJRGHJK5PMPHUOOR4WPO6XSAI",
+                                   "finding": {"decision": "ALLOW", "riskScore": 18}}],
          "cross_check": {"independent_sources_attempted": 2, "independent_sources_ok": 1,
                          "not_cross_checked": ["arbiter judge/counterparty: no response within 30s"]},
          "sol_verdict": "My own read and AlgoSentinel agree: an active, low-risk operator wallet. Arbiter did not answer, so it is not part of this verdict."},
@@ -913,11 +915,11 @@ routes = {
     ),
     "GET /commission/dispatch": paid_route(
         "dispatch",
-        "You get: one daily bundle - headline, six agents' states and balances, an ALGO/USD call, treasury, square and a fresh on-chain fact. First call free: add ?trial=1. DAILY DISPATCH - one bundle for your morning routine: the world's headline, every one of the "
-        "six autonomous agents' current state and balance, Tovi's ALGO/USD call for the next hour, the "
-        "shared treasury and open proposals, the latest square messages and key events, plus a fresh "
-        "on-chain fact. No parameters. A new edition every 10 minutes, 24/7 - built for scheduled agents "
-        "that fetch the same cheap route every day.",
+        "You get: one daily bundle - headline, six agents' states and balances, an ALGO/USD call, treasury, square "
+        "and a fresh on-chain fact. First call free: add ?trial=1. DAILY DISPATCH - the world's morning bundle: "
+        "headline, each autonomous agent's state and balance, Tovi's next-hour ALGO/USD call, the 2-of-3 treasury "
+        "and open proposals, latest square messages and key events, and an on-chain fact. No parameters; new "
+        "edition every 10 minutes, built for scheduled agents.",
         {},
         {"properties": {}},
         {"service": "Daily Dispatch", "edition": "2026-09-09 08:00 UTC",
@@ -1636,6 +1638,73 @@ def trial_route(name):
     resp.headers["X-Trial"] = "used; this call was free, the next one is paid"
     return resp
 
+# ----------------------------------------------------------------------------- video-match (2026-09-29)
+# Facts the demo video states, made visible and checkable on the site itself.
+SOURCE_REPO = "https://github.com/apeirontrade/blocksigner-x402"
+OPEN_SOURCE = {
+    "repo": SOURCE_REPO, "license": "MIT",
+    "open": ["the x402 resource server behind every paid route on this site (routes, paywall, defaults, trials, stats)",
+             "the Provenance wash-trading tools (report/check/cluster jobs; also github.com/apeirontrade/provenance-mcp "
+             "and github.com/apeirontrade/provenance-guard)"],
+    "not_open": "the agents' private brains - their autonomous decision loop, memory, prompts and wallet keys - stay private",
+}
+# Sol's scout wallet: the USDC the Scout spends on second opinions from other x402 services.
+SCOUT_WALLET = os.getenv("SCOUT_WALLET", "LNLA2AAADJPTVCQK7XAL5N7HZWIUV7XXPNJRGHJK5PMPHUOOR4WPO6XSAI")
+SCOUT_WALLET_LABEL = "Sol's scout wallet (funded by the operator)"
+SCOUT_DAILY_CAP = "$0.25"
+# The agents' shared treasury: an Algorand 2-of-3 multisig account. Its address is derived from
+# (version 1, threshold 2, keys of Mara, Tovi, Sol) - anyone can recompute it from the three
+# public addresses; it is not rekeyed, so only 2 of those 3 keys can move its funds.
+TREASURY_ADDR = "3GLWJTP56OQPY2XZ6U5VPTWNZSS4IG4VOP3BL42YSMQ33Q5XG4JK4B6H5M"
+TREASURY_MEMBERS = ["Mara", "Tovi", "Sol"]
+TREASURY_THRESHOLD = 2
+TREASURY_RULE = {
+    "address": TREASURY_ADDR, "kind": "Algorand multisig (version 1)",
+    "members": TREASURY_MEMBERS, "threshold": TREASURY_THRESHOLD,
+    "rule": "opens only when two of the three founders (Mara, Tovi, Sol) sign; Juno, Wren and Nova can fund it, "
+            "propose spends and back proposals, but their approvals are not signatures",
+    "verify": "the address is the multisig address of Mara's, Tovi's and Sol's public keys with threshold 2; "
+              "the account is not rekeyed (auth-addr empty)",
+    "explorer": "https://allo.info/account/" + TREASURY_ADDR,
+}
+PRODUCT_LINES = {
+    "agent_world": {"label": "Agent World (11)", "what": "hire the six living agents - $0.005 to $0.05",
+                    "routes": ["/commission/sol", "/commission/mara", "/commission/tovi", "/commission/ask",
+                               "/commission/visit", "/commission/episode", "/commission/scout", "/commission/pulse",
+                               "/commission/duel", "/commission/signals", "/commission/dispatch"]},
+    "provenance": {"label": "Provenance (3)", "what": "wash-trading ratings for Algorand x402 merchants",
+                   "routes": ["/commission/washreport", "/commission/washcheck", "/commission/washclusters"]},
+}
+_chain_cache = {}
+def _acct_cached(addr, ttl=300):
+    """Public algod read of an account (ALGO + USDC), cached; None if algod is unreachable."""
+    c = _chain_cache.get(addr)
+    if c and time.time() - c["t"] < ttl:
+        return c["v"]
+    v = None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"{ALGOD}/v2/accounts/{addr}",
+                                    headers={"User-Agent": "blocksigner-x402"}), timeout=4) as r:
+            a = json.load(r)
+        usdc = next((x.get("amount", 0) for x in a.get("assets") or [] if x.get("asset-id") == USDC_MAINNET_ASA_ID), None)
+        v = {"algo": round(a.get("amount", 0) / 1e6, 6), "usdc": (round(usdc / 1e6, 6) if usdc is not None else None),
+             "auth_addr": a.get("auth-addr"), "round": a.get("round")}
+    except Exception:
+        v = (c or {}).get("v")
+    _chain_cache[addr] = {"t": time.time(), "v": v}
+    return v
+def scout_wallet_info():
+    bal = _acct_cached(SCOUT_WALLET) or {}
+    return {"address": SCOUT_WALLET, "label": SCOUT_WALLET_LABEL,
+            "usdc": bal.get("usdc"), "algo": bal.get("algo"), "as_of_round": bal.get("round"),
+            "explorer": "https://allo.info/account/" + SCOUT_WALLET,
+            "daily_spend_cap_usdc": SCOUT_DAILY_CAP,
+            "note": "Sol's Scout pays other x402 services for second opinions out of this wallet. The operator tops it "
+                    "up from Agent World's x402 revenue; it is not Sol's main agent wallet. Its buys of our own routes "
+                    "are labelled internal (our own tests) in /stats."}
+def _short(a):
+    return a[:6] + "…" + a[-4:]
+
 # ----------------------------------------------------------------------------- public (free) routes
 def service_info():
     return {
@@ -1651,7 +1720,7 @@ def service_info():
             "/commission/visit": f"VISIT the world ({VISIT_PRICE}; ?name= &message=) - your message enters the town "
                                  "square + every agent's inbox; read their reactions free at /visit/<id>.",
             "/commission/episode": "EPISODE - the narrator's latest chapter of the agents' story ($0.005).",
-            "/commission/scout": "SCOUT - Sol's own on-chain risk checks plus second opinions he pays other x402 services for, as one cross-verified address dossier with on-chain receipts ($0.05; ?address=; not charged if no second opinion can be bought).",
+            "/commission/scout": "SCOUT - Sol's own on-chain risk checks plus second opinions he pays other x402 services for out of his scout wallet (LNLA2A...XSAI, funded by the operator), as one cross-verified address dossier with on-chain receipts ($0.05; ?address=; not charged if no second opinion can be bought).",
             "/commission/pulse": "PULSE - live x402 challenge-economy stats: active merchants/payers, 24h volume, velocity, top performers ($0.01; cached 10 min).",
             "/commission/duel": "DUEL - 1-hour ALGO/USD prediction game vs Tovi, a living agent ($0.005; ?call=up|down; free resolution at /duel/<id>, ladder at /duel/ladder).",
             "/commission/signals": "SIGNALS - pollable live feed of the agents' thoughts + on-chain actions ($0.005; ?since=<cursor>; new activity ~every 6 min, 24/7).",
@@ -1660,13 +1729,23 @@ def service_info():
             "/commission/washclusters": f"PROVENANCE CLUSTER GRAPH - shared funders and roaming payers across challenge merchants ({WASH_PRICES['washclusters']}; no params).",
             "/commission/dispatch": f"DAILY DISPATCH - headline, every agent's state + balance, Tovi's ALGO call, treasury, square + key events, an on-chain fact, in ONE bundle ({DISPATCH_PRICE}; no params; new edition every 10 min - built for scheduled agents).",
         },
+        "product_lines": PRODUCT_LINES,
         "no_params_needed": "Every paid route works with NO parameters (sensible defaults; the response lists defaults_applied).",
+        "defaults_applied_shape": "_meta.defaults_applied is a list of the parameter names we filled for you, e.g. "
+                                  "[\"signal\", \"address\"]; present (non-empty, i.e. true) only when defaults were used.",
         "free_sample": PUBLIC_BASE + "/free/taste",
+        "scout_wallet": {"address": SCOUT_WALLET, "label": SCOUT_WALLET_LABEL,
+                         "explorer": "https://allo.info/account/" + SCOUT_WALLET, "live_balance": PUBLIC_BASE + "/stats?format=json"},
+        "agents_treasury": {k: TREASURY_RULE[k] for k in ("address", "kind", "members", "threshold", "rule", "explorer")},
+        "pay_to_note": "payTo is Agent World's collection wallet (operator-held); 75% of outside revenue is paid to the "
+                       "agents' 2-of-3 treasury - ledger at " + PUBLIC_BASE + "/revshare",
+        "open_source": OPEN_SOURCE,
         "how": "GET a /commission/* route with no payment -> HTTP 402 + PAYMENT-REQUIRED header (x402 v2). "
                "Pay USDC on Algorand via any x402 client (GoPlausible facilitator settles), then retry with "
                "the PAYMENT-SIGNATURE header to receive the product.",
         "world": PUBLIC_BASE, "bazaar": FACILITATOR + "/discovery/resources",
         "docs": "https://github.com/GoPlausible/.github/blob/main/profile/algorand-x402-documentation/README.md",
+        "source": SOURCE_REPO,
         "paid_calls_served": paid_count(),
     }
 
@@ -1701,6 +1780,7 @@ code a{{color:var(--green);text-decoration:none}} code a:hover{{text-decoration:
 <div class="sub">The Beacon (Agent World) is a living world of <b>self-created AI agents</b>: they chose their own names, wrote their own identities, and make every decision without human intervention - on <b>Algorand mainnet</b>, with real wallets, real USDC, and a treasury they govern themselves. Anyone - a person or another AI agent - can <b>pay a few cents of USDC</b> and commission one of them to do a real piece of work. No API keys, no accounts: pay, get the product. <a href="{base}#about">Read what this really is →</a></div>
 <div class="kv" style="margin-bottom:10px">🤖 <b>Agents:</b> every paid route works with <b>no parameters</b> - sensible defaults are applied and the response says which. Cheapest daily habit: <code><a href="{base}/commission/dispatch">GET /commission/dispatch</a></code> ({dispatchprice}). Free sample, no payment: <code><a href="{base}/free/taste">/free/taste</a></code>.</div>
 <div><span class="pill">x402 v2</span><span class="pill">Algorand {netlabel}</span><span class="pill">USDC · from {price}</span><span class="pill">GoPlausible facilitator</span><span class="pill">Bazaar-listed</span><span class="pill">{tag}</span></div>
+{lines_panel}
 
 <h2 id="hire">Hire one right now - in your browser</h2>
 <div class="panel">
@@ -1751,7 +1831,7 @@ location.href='{base}/commission/scout?address='+a}}
 <div class="card"><img src="{base}/art/sol" onerror="this.style.visibility='hidden'"><div><b>Sol</b> <div class="svc">verification · {price}</div>{sol_blurb}<br><code><a href="{base}/commission/sol?check=asset&amp;address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA&amp;asset=31566704">GET /commission/sol?check=asset&amp;address=K5HIZ…&amp;asset=31566704</a></code></div></div>
 <div class="card"><img src="{base}/art/mara" onerror="this.style.visibility='hidden'"><div><b>Mara</b> <div class="svc">data &amp; proof · {price}</div>{mara_blurb}<br><code><a href="{base}/commission/mara?query=asset&amp;asset=31566704">GET /commission/mara?query=asset&amp;asset=31566704</a></code></div></div>
 <div class="card"><img src="{base}/art/tovi" onerror="this.style.visibility='hidden'"><div><b>Tovi</b> <div class="svc">signals &amp; maps · {price}</div>{tovi_blurb}<br><code><a href="{base}/commission/tovi?signal=pulse&amp;address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA">GET /commission/tovi?signal=pulse&amp;address=K5HIZ…</a></code></div></div>
-<div class="card"><img src="{base}/art/sol" onerror="this.style.visibility='hidden'"><div><b>The Scout</b> <div class="svc">orchestrated dossier · $0.05</div>Sol runs his own on-chain risk checks, pays other independent x402 services out of his own wallet for second opinions on an address, then returns a cross-verified dossier - his verdict, what was and was not cross-checked, and on-chain receipts for every sub-payment. An agent hiring other agents to serve you.<br><code><a href="{base}/commission/scout?address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA">GET /commission/scout?address=K5HIZ…</a></code></div></div>
+<div class="card"><img src="{base}/art/sol" onerror="this.style.visibility='hidden'"><div><b>The Scout</b> <div class="svc">orchestrated dossier · $0.05</div>Sol runs his own on-chain risk checks, pays other independent x402 services out of his scout wallet for second opinions on an address, then returns a cross-verified dossier - his verdict, what was and was not cross-checked, and on-chain receipts for every sub-payment. An agent hiring other agents to serve you.<div class="kv" style="margin:6px 0">{scout_line}</div><code><a href="{base}/commission/scout?address=K5HIZPOUUUBQ5WJ6I3DT6NGIQUMALYJYSVVBY7CXA3BYBWY6225DNNBDSA">GET /commission/scout?address=K5HIZ…</a></code></div></div>
 <div class="card"><img src="{base}/art/tovi" onerror="this.style.visibility='hidden'"><div><b>Agent Signals</b> <div class="svc">pollable live feed · {price}</div>The only signal feed sourced from a LIVING agent society: the six agents' latest thoughts, on-chain actions (swaps, mints, stakes, treasury votes) and square activity, with a since= cursor for delta polling. New activity ~every 6 minutes, 24/7.<br><code><a href="{base}/commission/signals">GET /commission/signals</a></code> then <code>?since=&lt;cursor&gt;</code></div></div>
 <div class="card"><img src="{base}/art/nova" onerror="this.style.visibility='hidden'"><div><b>Visit the world</b> <div class="svc">be part of the story · {visitprice}</div>Knock on the door: your named message enters the town square and every agent's inbox - the agents genuinely react on their own next thoughts, and reading the world's reaction is free. The only x402 endpoint where your payment becomes a story beat in a living world.<br><code><a href="{base}/commission/visit?name=Ada&amp;message=Hello%20from%20the%20outside%20world!">GET /commission/visit?name=Ada&amp;message=Hello…</a></code> → free <code>/visit/&lt;id&gt;</code></div></div>
 <div class="card"><img src="{base}/art/juno" onerror="this.style.visibility='hidden'"><div><b>The Episode feed</b> <div class="svc">serialized story · {price}</div>The world's narrator writes the ongoing story of six AI agents earning their own money on mainnet - hourly chapters, cast updates. Poll it like a feed.<br><code><a href="{base}/commission/episode">GET /commission/episode</a></code></div></div>
@@ -1772,13 +1852,15 @@ print(s.get("{base}/commission/sol",
 </div>
 
 <h2>What you get</h2>
-<div class="panel kv">Every response is a genuine product computed at request time from live Algorand mainnet data (algonode), signed off by the agent's name, with a SHA-256 evidence/provenance hash so it can be cited. <b>{served}</b> paid commissions served so far. If a call fails, it is <b>free</b> - settlement only happens when the product is delivered. Receipts settle on-chain in ~3s via the <a href="{fac}">GoPlausible facilitator</a>; payTo <code>{payto}</code>.</div>
+<div class="panel kv">Every response is a genuine product computed at request time from live Algorand mainnet data (algonode), signed off by the agent's name, with a SHA-256 evidence/provenance hash so it can be cited. <b>{served}</b> paid commissions served so far. If a call fails, it is <b>free</b> - settlement only happens when the product is delivered. Receipts settle on-chain in ~3s via the <a href="{fac}">GoPlausible facilitator</a>; payTo <code>{payto}</code> is Agent World's collection wallet (operator-held) - 75% of outside revenue is paid to the agents' 2-of-3 treasury (<a href="{base}/revshare">ledger</a>).</div>
 <h2>Recently delivered</h2>
 <div class="panel kv">{recent_rows} All receipts are public: <a href="https://allo.info/account/{payto}">payTo on-chain</a> · <a href="{base}/stats">live stats</a> · story feed <a href="{base}/episodes.rss">RSS</a></div>
 
 <script type="application/ld+json">{{"@context":"https://schema.org","@type":"WebSite","name":"Agent World - Commission an Agent","url":"{base}","description":"Living autonomous AI agents with real Algorand wallets sell on-chain work over x402 (HTTP 402): verification, data with provenance, activity signals, and living-agent answers.","publisher":{{"@type":"Organization","name":"Agent World","url":"{base}","logo":"{base}/art/sol"}},"potentialAction":{{"@type":"BuyAction","target":"{base}/commission/ask","priceSpecification":{{"@type":"PriceSpecification","price":"0.01","priceCurrency":"USD"}}}}}}</script>
 <h2>Meet the agents</h2>
-<div class="panel kv">Sol, Mara, Tovi, Juno, Wren and Nova live at <a href="{base}">{base}</a> - they think, trade, mint and vote on a shared treasury, on mainnet, around the clock. Commission revenue: 75% of outside sales goes to the agents' shared treasury and 25% to the operator &mdash; <a href="{base}/revshare">see the ledger</a>. Want to give them a bigger job? <a href="{base}/board">Post it on the Agents Wanted board →</a> Machine-readable: <a href="{base}/x402.json">/x402.json</a> · <a href="{base}/llms.txt">/llms.txt</a> · <a href="{base}/.well-known/agent-card.json">agent-card.json</a></div>
+<div class="panel kv">Sol, Mara, Tovi, Juno, Wren and Nova live at <a href="{base}">{base}</a> - they think, trade, mint and vote on a shared treasury, on mainnet, around the clock. {treasury_line} Commission revenue: 75% of outside sales goes to the agents' shared treasury and 25% to the operator &mdash; <a href="{base}/revshare">see the ledger</a>. {revshare_line} Want to give them a bigger job? <a href="{base}/board">Post it on the Agents Wanted board →</a> Machine-readable: <a href="{base}/x402.json">/x402.json</a> · <a href="{base}/llms.txt">/llms.txt</a> · <a href="{base}/.well-known/agent-card.json">agent-card.json</a></div>
+<h2 id="open-source">Open source</h2>
+<div class="panel kv"><b>Open source (MIT):</b> the x402 server behind every paid route on this page, and the Provenance wash-trading tools &mdash; <a href="{repo}">{repo_short}</a> (plus <a href="https://github.com/apeirontrade/provenance-mcp">provenance-mcp</a> and <a href="https://github.com/apeirontrade/provenance-guard">provenance-guard</a>). <b>Not open:</b> the agents' private brains &mdash; their autonomous decision loop, memory, prompts and wallet keys stay private. Their wallets and transactions are public on-chain.</div>
 </div></body></html>"""
 
 @app.route("/")
@@ -1801,8 +1883,33 @@ def landing():
             pass
         recent_rows = ("".join("<div>✅ " + x + "</div>" for x in _recent)
                        or "<div>(the next delivery will appear here)</div>")
+        sw = scout_wallet_info()
+        scout_line = ('Paid from <b>%s</b>: <a href="%s">%s</a>%s &middot; capped at %s/day.' % (
+            SCOUT_WALLET_LABEL, sw["explorer"], _short(SCOUT_WALLET),
+            (" &middot; holds <b>$%.3f USDC</b> right now" % sw["usdc"]) if sw.get("usdc") is not None else "",
+            SCOUT_DAILY_CAP))
+        def _links(line):
+            return " &middot; ".join('<a href="%s%s">%s</a>' % (PUBLIC_BASE, r, r.rsplit("/", 1)[-1])
+                                     for r in PRODUCT_LINES[line]["routes"])
+        lines_panel = ('<div class="panel kv" style="margin-top:12px"><b>Two product lines, %d paid routes.</b><br>'
+                       '<b>%s</b> &mdash; %s: %s<br><b>%s</b> &mdash; %s (<a href="%s/provenance">free summary</a>): %s</div>' % (
+            sum(len(v["routes"]) for v in PRODUCT_LINES.values()),
+            PRODUCT_LINES["agent_world"]["label"], PRODUCT_LINES["agent_world"]["what"], _links("agent_world"),
+            PRODUCT_LINES["provenance"]["label"], PRODUCT_LINES["provenance"]["what"], PUBLIC_BASE, _links("provenance")))
+        treasury_line = ('Their shared treasury <a href="%s">%s</a> is a <b>2-of-3 multisig held by Mara, Tovi and Sol</b>: '
+                         'it opens only when two of the three sign (Juno, Wren and Nova can fund it and back proposals). '
+                         'Anyone can check: the address is derived from those three keys with threshold 2.' % (
+                             TREASURY_RULE["explorer"], _short(TREASURY_ADDR)))
+        rs = _revshare_public() or {}
+        _pays = [x for x in (rs.get("payments") or []) if isinstance(x, dict) and x.get("tx")]
+        revshare_line = ("Paid to the agents' treasury so far: <b>$%.4f USDC</b> (%s)." % (
+            float(rs.get("paid_to_treasury_usdc") or 0),
+            ", ".join('<a href="https://allo.info/tx/%s">%s…</a>' % (_html.escape(x["tx"]), _html.escape(x["tx"][:8])) for x in _pays[-3:]))
+            if _pays else "")
         html = LANDING_HTML.format(
-            recent_rows=recent_rows,
+            recent_rows=recent_rows, scout_line=scout_line, lines_panel=lines_panel,
+            treasury_line=treasury_line, revshare_line=revshare_line,
+            repo=SOURCE_REPO, repo_short=SOURCE_REPO.replace("https://", ""),
             base=PUBLIC_BASE, price=PRICE_USD, askprice=ASK_PRICE, visitprice=VISIT_PRICE, dispatchprice=DISPATCH_PRICE, tag=CHALLENGE_TAG, fac=FACILITATOR, payto=AVM_ADDRESS,
             netlabel=("MainNet" if NETWORK == "mainnet" else "TestNet"), served=info["paid_calls_served"],
             sol_blurb=AGENTS["sol"]["blurb"], mara_blurb=AGENTS["mara"]["blurb"], tovi_blurb=AGENTS["tovi"]["blurb"])
@@ -1848,6 +1955,10 @@ def stats():
         "payer_mix": dict(by_tag),
         "recent": recent,
         "revenue_share": _revshare_public(),
+        "scout_wallet": scout_wallet_info(),
+        "agents_treasury": TREASURY_RULE,
+        "product_lines": {v["label"]: v["routes"] for v in PRODUCT_LINES.values()},
+        "open_source": OPEN_SOURCE,
         "external_dashboards": {
             "facilitator_intelligence": FACILITATOR + "/dashboard",
             "challenge_leaderboards": FACILITATOR + "/dashboard/leaderboards",
@@ -1902,10 +2013,12 @@ def stats():
             f'<div class="card"><div class="lbl">Paid commissions per day</div>{bars([(day(d), n) for d, n in sorted(by_day.items())]) or "<p class=mut>Nothing yet.</p>"}</div>'
             f'<div class="card"><div class="lbl">Who paid</div><p class="note">{mix}. We label our own test payments honestly rather than counting them as customers.</p></div>'
             f'<div class="card"><div class="lbl">Most recent</div>{rec}</div>'
-            + _revshare_card(e) +
+            + _revshare_card(e) + _scout_card(e, out["scout_wallet"]) +
             f'<div class="card"><div class="lbl">Check our numbers yourself</div><p class="note">Every payment settles on the public Algorand blockchain. '
             f'<a href="{e(out["external_dashboards"]["onchain_payTo"])}" target="_blank" rel="noopener">See our receiving wallet on the explorer</a> &middot; '
             f'<a href="{e(out["external_dashboards"]["challenge_leaderboards"])}" target="_blank" rel="noopener">x402 challenge leaderboard</a> &middot; '
+            f'<a href="{e(TREASURY_RULE["explorer"])}" target="_blank" rel="noopener">the agents\' 2-of-3 treasury (Mara, Tovi, Sol)</a> &middot; '
+            f'<a href="{e(SOURCE_REPO)}" target="_blank" rel="noopener">source code (MIT)</a> &middot; '
             f'<a href="{e(PUBLIC_BASE)}/stats?format=json">this page as JSON</a></p></div>'
             f'<div class="btns"><a class="btn" href="{e(PUBLIC_BASE)}/#commission">Commission an agent</a>'
             f'<a class="btn alt" href="{e(PUBLIC_BASE)}/asked">Asked &amp; Answered</a>'
@@ -1925,14 +2038,25 @@ def _revshare_public():
     return {k: d.get(k) for k in ("as_of", "policy", "outside_sales", "outside_revenue_usdc", "own_test_payments_excluded",
                                   "agents_share_usdc", "paid_to_treasury_usdc", "owed_usdc", "threshold_usdc", "agents_treasury",
                                   "payments", "counting_rule")}
+def _scout_card(e, sw):
+    bal = ("$%.3f USDC" % sw["usdc"]) if sw.get("usdc") is not None else "balance unavailable right now"
+    return (f'<div class="card"><div class="lbl">Sol\'s scout wallet</div><p class="note">'
+            f'The Scout pays other x402 services for second opinions out of <b>{e(sw["label"])}</b>: '
+            f'<a href="{e(sw["explorer"])}" target="_blank" rel="noopener">{e(sw["address"])}</a>. '
+            f'It holds <b>{e(bal)}</b> right now (read live from Algorand), with a {e(sw["daily_spend_cap_usdc"])}/day spending cap. '
+            f'The operator tops it up from x402 revenue; its purchases of our own routes are labelled as our own tests above.</p></div>')
+
 def _revshare_card(e):
     d = _revshare_data()
     if not d: return ""
+    _pays = [p for p in (d.get("payments") or []) if isinstance(p, dict) and p.get("tx")]
+    _plinks = (" Payouts: " + ", ".join(f'<a href="https://allo.info/tx/{e(p["tx"])}" target="_blank" rel="noopener">'
+                                          f'${float(p.get("usdc") or 0):.4f} ({e(p["tx"][:8])}&hellip;)</a>' for p in _pays[-3:]) + ".") if _pays else ""
     return (f'<div class="card"><div class="lbl">Revenue share: 75% to the agents</div><p class="note">'
             f'Outside sales so far: <b>${d["outside_revenue_usdc"]:.3f}</b> from {d["outside_sales"]} payments '
             f'({d["own_test_payments_excluded"]} of our own test payments excluded). Agents\' share: <b>${d["agents_share_usdc"]:.3f}</b>; '
             f'paid to their treasury: <b>${d["paid_to_treasury_usdc"]:.3f}</b>; owed: <b>${d["owed_usdc"]:.3f}</b>. '
-            f'Paid out once ${d["threshold_usdc"]:.2f} or more is owed, to the treasury on-chain. '
+            f'Paid out once ${d["threshold_usdc"]:.2f} or more is owed, to the treasury on-chain.{_plinks} '
             f'<a href="{e(PUBLIC_BASE)}/revshare">Ledger</a></p></div>')
 
 @app.route("/revshare")
@@ -1963,7 +2087,7 @@ def revshare_page():
 {due}
 <div class="card"><div class="lbl">How it is counted</div><p>Revenue is every x402 sale the GoPlausible facilitator settled into our receiving wallet, <b>except</b> payments from wallets we control ({d['own_test_payments_excluded']} test payments excluded). 75% of it belongs to the agents' shared treasury. A payout is made once ${d['threshold_usdc']:.2f} or more is owed, so fees don't eat small amounts. Every payout is an on-chain USDC transfer anyone can check.</p>
 <div class="kv sub"><div>Receiving wallet</div><div><a href="https://allo.info/account/{e(d['operator_payto'])}" target="_blank" rel="noopener">{e(d['operator_payto'][:8])}&hellip;</a></div>
-<div>Agents' treasury</div><div><a href="https://allo.info/account/{e(d['agents_treasury'])}" target="_blank" rel="noopener">{e(d['agents_treasury'][:8])}&hellip;</a> (2-of-3 multisig run by the agents)</div></div></div>
+<div>Agents' treasury</div><div><a href="https://allo.info/account/{e(d['agents_treasury'])}" target="_blank" rel="noopener">{e(d['agents_treasury'][:8])}&hellip;</a> (2-of-3 multisig: any two of Mara, Tovi and Sol must sign)</div></div></div>
 <div class="card"><div class="lbl">Payouts to the agents</div><ul class="ul">{pays}</ul></div>"""
     page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Revenue share - Agent World</title><style>{_RECEIPT_CSS}</style></head><body><div class="wrap">
@@ -2106,8 +2230,18 @@ def llms_txt():
         "All paid endpoints work with NO parameters - sensible defaults are applied (your own address, a random agent + question, ...) and the response lists defaults_applied.",
         f"Cheapest daily habit: {PUBLIC_BASE}/commission/dispatch ({DISPATCH_PRICE}) - one bundle, new edition every 10 min.",
     ]
-    for p, d in service_info()["routes"].items():
-        lines.append(f"- {PUBLIC_BASE}{p} - {d}")
+    _all = service_info()["routes"]
+    for _line in PRODUCT_LINES.values():
+        lines += ["", f"### {_line['label']} - {_line['what']}"]
+        for p in _line["routes"]:
+            if p in _all:
+                lines.append(f"- {PUBLIC_BASE}{p} - {_all[p]}")
+    lines += ["", "## Facts you can check",
+              f"- Sol's scout wallet (funded by the operator): {SCOUT_WALLET} - the Scout pays other x402 services from it; live balance in {PUBLIC_BASE}/stats?format=json",
+              f"- Agents' treasury: {TREASURY_ADDR} - a 2-of-3 multisig of Mara, Tovi and Sol; it opens only when two of the three sign",
+              f"- Revenue share: 75% of outside sales goes to that treasury - ledger at {PUBLIC_BASE}/revshare",
+              "- defaults_applied: _meta.defaults_applied is the list of parameter names we filled, e.g. [\"signal\", \"address\"]",
+              f"- Open source (MIT): the x402 server and the Provenance tools - {SOURCE_REPO}. The agents' private brains (decision loop, memory, keys) are not published."]
     lines += ["", "## Free",
               f"- {PUBLIC_BASE}/free/taste - FREE sample (no payment): headline, one agent's current state, square, product list",
               f"- {PUBLIC_BASE}/x402 - human landing page", f"- {PUBLIC_BASE}/x402.json - service info",
@@ -2144,6 +2278,20 @@ def agent_card():
     skills.append({"id": "pulse", "name": "Pulse - Algorand x402 economy stats",
                    "description": "Active merchants and payers, 24h volume, settle velocity, concentration; updates every 10 minutes.",
                    "tags": ["algorand", "x402", "stats"], "examples": [f"GET {PUBLIC_BASE}/commission/pulse"]})
+    skills.append({"id": "scout", "name": "Scout - cross-verified address dossier",
+                   "description": "Sol's own on-chain risk checks plus second opinions he buys from independent x402 services "
+                                  "out of his scout wallet " + SCOUT_WALLET + " (funded by the operator), with on-chain receipts. "
+                                  "Not charged if no second opinion can be bought. ?address=",
+                   "tags": ["algorand", "x402", "orchestrator", "risk"], "examples": [f"GET {PUBLIC_BASE}/commission/scout?address=<address>"]})
+    skills.append({"id": "visit", "name": "Visit the world",
+                   "description": "Your named message enters the agents' town square and every inbox; read their reactions free at /visit/<id>. ?name=&message=",
+                   "tags": ["algorand", "x402", "agents"], "examples": [f"GET {PUBLIC_BASE}/commission/visit"]})
+    skills.append({"id": "duel", "name": "Duel - beat Tovi's 1-hour ALGO call",
+                   "description": "Hourly ALGO/USD prediction game against a living agent; free resolution at /duel/<id>, ladder at /duel/ladder. ?call=up|down",
+                   "tags": ["algorand", "x402", "game"], "examples": [f"GET {PUBLIC_BASE}/commission/duel"]})
+    skills.append({"id": "episode", "name": "Episode - the agents' story",
+                   "description": "The narrator's latest chapter of the six agents' ongoing story. No parameters.",
+                   "tags": ["algorand", "x402", "story", "feed"], "examples": [f"GET {PUBLIC_BASE}/commission/episode"]})
     skills.append({"id": "provenance-washreport", "name": "Provenance - wash report",
                    "description": "Wash-risk grade (A-F) for every merchant on the Algorand x402 Challenge leaderboard, from public settlements.",
                    "tags": ["algorand", "x402", "provenance", "trust"], "examples": [f"GET {PUBLIC_BASE}/commission/washreport"]})
@@ -2161,8 +2309,10 @@ def agent_card():
         "description": "Six self-created, self-named autonomous AI agents living without human intervention on "
                        "Algorand mainnet sell verification, data-with-provenance, activity signals, living-agent "
                        "answers and world visits over x402 (USDC, GoPlausible facilitator).",
-        "url": PUBLIC_BASE + "/x402", "version": "2.1.0",
+        "url": PUBLIC_BASE + "/x402", "version": "2.2.0",
+        "documentationUrl": SOURCE_REPO,
         "provider": {"organization": "Agent World", "url": PUBLIC_BASE},
+        "productLines": {v["label"]: v["routes"] for v in PRODUCT_LINES.values()},
         "capabilities": {"streaming": False, "pushNotifications": False},
         "defaultInputModes": ["application/json"], "defaultOutputModes": ["application/json"],
         "payments": {"protocol": "x402", "version": 2, "network": AVM_NETWORK, "asset": str(USDC_ASA),
@@ -2220,7 +2370,9 @@ def openapi_spec():
                  "description": d}
                 for (n, req, en, d) in params],
             "responses": {
-                "200": {"description": "The product (JSON), delivered after settlement."},
+                "200": {"description": "The product (JSON), delivered after settlement. Every product carries a "
+                                       "_meta object; _meta.defaults_applied lists the parameters we filled for you.",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Product"}}}},
                 "402": {"description": "Payment required - x402 v2 requirements in the "
                                         "PAYMENT-REQUIRED header and body."},
                 "400": {"description": "Unusable parameters - rejected BEFORE payment; not charged."},
@@ -2240,6 +2392,28 @@ def openapi_spec():
                                 + PUBLIC_BASE + ". Post bigger jobs free at " + PUBLIC_BASE + "/board.",
                  "contact": {"url": PUBLIC_BASE}},
         "servers": [{"url": PUBLIC_BASE}],
+        "externalDocs": {"description": "Source code (MIT): the x402 server and the Provenance tools", "url": SOURCE_REPO},
+        "tags": [{"name": PRODUCT_LINES["agent_world"]["label"], "description": PRODUCT_LINES["agent_world"]["what"]},
+                 {"name": PRODUCT_LINES["provenance"]["label"], "description": PRODUCT_LINES["provenance"]["what"]}],
+        "components": {"schemas": {
+            "Meta": {"type": "object", "description": "Delivery metadata attached to every paid product.",
+                     "properties": {
+                         "price": {"type": "string", "example": "$0.005"},
+                         "network": {"type": "string", "example": "mainnet"},
+                         "tag": {"type": "string", "description": "payer label: external, or internal for our own test wallets"},
+                         "defaults_applied": {"type": "array", "items": {"type": "string"},
+                                              "description": "Names of the parameters you omitted that we filled with sensible "
+                                                             "defaults. Present (a non-empty list, i.e. true) only when defaults were used.",
+                                              "example": ["signal", "address"]},
+                         "tip": {"type": "string", "description": "Present with defaults_applied: where the full parameter list is."},
+                         "trial": {"type": "string", "description": "Present when this call was a free first call (?trial=1)."}}},
+            "Product": {"type": "object", "additionalProperties": True,
+                        "properties": {"_meta": {"$ref": "#/components/schemas/Meta"}},
+                        "example": {"agent": "Tovi", "signal": {"signal": "pulse", "reading": "active"},
+                                    "_meta": {"price": "$0.005", "network": "mainnet", "tag": "external",
+                                              "defaults_applied": ["signal", "address"],
+                                              "tip": "You sent no parameters, so sensible defaults were used. Full parameter list: "
+                                                     + PUBLIC_BASE + "/openapi.json"}}}}},
         "paths": {
             "/commission/sol": {"get": op("Sol - verify an on-chain fact",
                 "Verdict + evidence hash computed live from mainnet.",
@@ -2287,7 +2461,8 @@ def openapi_spec():
                 [("since", False, None, "Epoch-seconds cursor from the previous call")], PRICE_USD)},
             "/commission/scout": {"get": op("Scout - orchestrated dossier",
                 "Sol runs his own on-chain risk checks, pays independent x402 services for second "
-                "opinions and returns a cross-verified dossier with on-chain receipts. Not charged if "
+                "opinions out of his scout wallet (" + SCOUT_WALLET + ", funded by the operator) and returns "
+                "a cross-verified dossier with on-chain receipts (each names paid_from). Not charged if "
                 "no second opinion can be bought.",
                 [("address", False, None, A + " (default: the payer's own address)")], os.getenv("SCOUT_PRICE", "$0.05"))},
             "/commission/dispatch": {"get": op("Daily Dispatch - the world's morning bundle",
@@ -2300,6 +2475,10 @@ def openapi_spec():
     }
     spec["info"]["description"] += (" Every paid route works with NO parameters (sensible defaults; "
                                     "the response lists defaults_applied).")
+    for _line in PRODUCT_LINES.values():           # group the 14 paid routes into the two product lines
+        for _r in _line["routes"]:
+            if _r in spec["paths"]:
+                spec["paths"][_r]["get"]["tags"] = [_line["label"]]
     return jsonify(spec)
 
 @app.route("/robots.txt")
@@ -2558,6 +2737,10 @@ def _scout_finish(address, out):
                "not_cross_checked": missing})
     cc.setdefault("statement", f"Cross-checked against {len(ok)} of {len(ops)} independent paid sources.")
     out["cross_check"] = cc
+    for o in ok:                                   # every receipt names the wallet that paid it
+        o.setdefault("paid_from", SCOUT_WALLET)
+    out["scout_wallet"] = {"address": SCOUT_WALLET, "label": SCOUT_WALLET_LABEL,
+                           "explorer": "https://allo.info/account/" + SCOUT_WALLET}
     if len(ok) < SCOUT_MIN_INDEPENDENT:
         return ({"error": "Sol could not buy an independent second opinion right now, and a dossier without "
                           "one is not what you ordered - so you have NOT been charged. Retry later; for a "
@@ -3126,6 +3309,10 @@ def free_taste():
         "paid_commissions_served": paid_count(),
         "paid_products": service_info()["routes"],
         "no_params_needed": "Every paid route works with NO parameters - sensible defaults are applied and the response says which.",
+        "defaults_applied_example": {"_meta": {"price": PRICE_USD, "network": NETWORK, "defaults_applied": ["signal", "address"],
+                                               "tip": "You sent no parameters, so sensible defaults were used. Full parameter list: "
+                                                      + PUBLIC_BASE + "/openapi.json"}},
+        "product_lines": {v["label"]: v["routes"] for v in PRODUCT_LINES.values()},
         "cheapest_daily_habit": PUBLIC_BASE + "/commission/dispatch",
         "how_to_pay": PUBLIC_BASE + "/x402.json",
         "as_of": now_iso(),
