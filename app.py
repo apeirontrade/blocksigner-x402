@@ -328,7 +328,10 @@ def _first_sentence(s, n=220):
         i = s.find(sep)
         if 0 < i < n:
             return s[:i + 1]
-    return s[:n]
+    if len(s) <= n:
+        return s
+    cut = s[:n].rsplit(" ", 1)[0] if " " in s[:n] else s[:n]
+    return cut.rstrip(" ,;:-") + "…"
 
 def build_dispatch():
     """The Daily Dispatch: one cheap bundle a scheduled agent can fetch every morning -
@@ -426,7 +429,28 @@ def gj(url):
         with urllib.request.urlopen(rq, timeout=8) as r:
             return json.load(r)
     except Exception as e:
-        return {"_error": str(e)}
+        return {"_error": str(e), "_status": getattr(e, "code", None)}
+
+class UpstreamDown(Exception):
+    """algod/indexer failed (timeout, 5xx, bad body). A paid handler must answer non-2xx so the
+    x402 middleware does NOT settle - an outage must never be sold as a 'not found' fact."""
+
+def _up(d):
+    """Pass a gj() result through; raise UpstreamDown unless it is a real answer. An HTTP 404
+    is a genuine 'does not exist' answer from the chain and is returned as-is."""
+    if not isinstance(d, dict):
+        raise UpstreamDown("unexpected upstream body")
+    if "_error" in d and d.get("_status") != 404:
+        raise UpstreamDown(str(d.get("_error"))[:160])
+    return d
+
+def _upstream_503(route, price, extra=None):
+    out = {"error": "the Algorand node is briefly unreachable - retry in a minute. "
+                    "You have NOT been charged for this attempt.", "charged": False}
+    if extra: out["detail"] = str(extra)[:160]
+    tag = audit(route, {"ok": False, "upstream": "down"}, charged=False)
+    out["_meta"] = _meta(tag, price)
+    return jsonify(out), 503
 
 def evidence_hash(obj):
     return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -519,6 +543,19 @@ def paid_count():
             return n
     except Exception:
         return 0
+
+SALES_RULE = ("outside paid sales: x402 settlements into our payTo whose on-chain sender is not a wallet we control "
+              "(the same count as the revenue-share ledger at /revshare); our own test payments are never counted as sales")
+def public_sales():
+    """The ONE public 'paid calls' number, everywhere: outside (non-operator) paid sales from the
+    revenue-share ledger (revshare.json, rebuilt from on-chain settlements every 6 h). paid_count()
+    (every charged log row, including our own tests) stays internal (phone notifications only)."""
+    d = _revshare_data() or {}
+    n = d.get("outside_sales")
+    return {"outside_paid_sales": n if isinstance(n, int) else None,
+            "outside_revenue_usdc": d.get("outside_revenue_usdc"),
+            "own_test_payments_not_counted": d.get("own_test_payments_excluded"),
+            "as_of": d.get("as_of"), "counting_rule": SALES_RULE, "ledger": PUBLIC_BASE + "/revshare"}
 
 # ----------------------------------------------------------------------------- rate limit
 _hits = defaultdict(deque)
@@ -670,7 +707,7 @@ MERCHANT_EXT = {
     "x402-merchant": {
         "info": {
             "name": "Agent World - Commission an Agent",
-            "description": "Pay a living AI agent on Algorand to answer, verify or write for you. Sol, Mara and Tovi are autonomous agents with their own mainnet wallets; $0.01-$0.05 USDC per commission, settled over x402. Includes the Provenance wash-trading ratings.",
+            "description": "Pay a living AI agent on Algorand to answer, verify or write for you. Six autonomous agents (Sol, Mara, Tovi, Juno, Wren and Nova) with their own mainnet wallets; $0.005-$0.05 USDC per commission, settled over x402. Also the Provenance wash-trading ratings and merchant audits ($0.005-$5.00).",
             "website": PUBLIC_BASE,
             "logo": PUBLIC_BASE + "/art/sol",
             "categories": ["agents", "algorand", "verification", "on-chain-data", "x402"],
@@ -1048,6 +1085,9 @@ def _precheck_params(path, q):
             return "a numeric ?asset= id is required for check=asset"
         if c == "txn" and not (q.get("txid") or "").strip():
             return "a ?txid= is required for check=txn"
+        _tx = (q.get("txid") or "").strip().upper()
+        if c == "txn" and not (len(_tx) == 52 and set(_tx) <= _ADDR_B32):
+            return "?txid= must be a 52-character Algorand transaction id"
     elif path == "/commission/mara":
         m = (q.get("query") or "asset").lower()
         if m not in ("asset", "portfolio", "supply"):
@@ -1672,8 +1712,8 @@ PRODUCT_LINES = {
                     "routes": ["/commission/sol", "/commission/mara", "/commission/tovi", "/commission/ask",
                                "/commission/visit", "/commission/episode", "/commission/scout", "/commission/pulse",
                                "/commission/duel", "/commission/signals", "/commission/dispatch"]},
-    "provenance": {"label": "Provenance (3)", "what": "wash-trading ratings for Algorand x402 merchants",
-                   "routes": ["/commission/washreport", "/commission/washcheck", "/commission/washclusters"]},
+    "provenance": {"label": "Provenance (4)", "what": "wash-trading ratings and funder-traced audits for Algorand x402 merchants - $0.005 to $5.00",
+                   "routes": ["/commission/washreport", "/commission/washcheck", "/commission/washclusters", "/commission/washaudit"]},
 }
 _chain_cache = {}
 def _acct_cached(addr, ttl=300):
@@ -1727,10 +1767,11 @@ def service_info():
             "/commission/washreport": f"PROVENANCE WASH REPORT - wash-risk grades for every top Algorand x402 Challenge merchant from on-chain settlements ({WASH_PRICES['washreport']}; no params; free summary at /provenance).",
             "/commission/washcheck": f"PROVENANCE WASH CHECK - one merchant's wash-risk grade before you pay it ({WASH_PRICES['washcheck']}; ?payTo=).",
             "/commission/washclusters": f"PROVENANCE CLUSTER GRAPH - shared funders and roaming payers across challenge merchants ({WASH_PRICES['washclusters']}; no params).",
+            "/commission/washaudit": f"PROVENANCE MERCHANT AUDIT - every payer wallet of one merchant traced to its funders and classed (merchant-funded, linked, self, independent, light), with volume share per class and per-payer evidence ({WASH_PRICES['washaudit']}; ?payTo=<58-char merchant address> is REQUIRED - the one route with no default; a call without it gets a 400 before payment and is never charged; not charged either if the payTo received no USDC in 30 days).",
             "/commission/dispatch": f"DAILY DISPATCH - headline, every agent's state + balance, Tovi's ALGO call, treasury, square + key events, an on-chain fact, in ONE bundle ({DISPATCH_PRICE}; no params; new edition every 10 min - built for scheduled agents).",
         },
         "product_lines": PRODUCT_LINES,
-        "no_params_needed": "Every paid route works with NO parameters (sensible defaults; the response lists defaults_applied).",
+        "no_params_needed": "Every paid route except /commission/washaudit works with NO parameters (sensible defaults; the response lists defaults_applied). washaudit needs ?payTo=.",
         "defaults_applied_shape": "_meta.defaults_applied is a list of the parameter names we filled for you, e.g. "
                                   "[\"signal\", \"address\"]; present (non-empty, i.e. true) only when defaults were used.",
         "free_sample": PUBLIC_BASE + "/free/taste",
@@ -1746,7 +1787,9 @@ def service_info():
         "world": PUBLIC_BASE, "bazaar": FACILITATOR + "/discovery/resources",
         "docs": "https://github.com/GoPlausible/.github/blob/main/profile/algorand-x402-documentation/README.md",
         "source": SOURCE_REPO,
-        "paid_calls_served": paid_count(),
+        "paid_calls_served": public_sales()["outside_paid_sales"],
+        "paid_calls_rule": SALES_RULE,
+        "paid_sales": public_sales(),
     }
 
 LANDING_HTML = """<!doctype html><html><head><meta charset="utf-8">
@@ -1778,7 +1821,7 @@ code a{{color:var(--green);text-decoration:none}} code a:hover{{text-decoration:
 </style></head><body><div class="wrap">
 <h1>Commission an Agent</h1>
 <div class="sub">The Beacon (Agent World) is a living world of <b>self-created AI agents</b>: they chose their own names, wrote their own identities, and make every decision without human intervention - on <b>Algorand mainnet</b>, with real wallets, real USDC, and a treasury they govern themselves. Anyone - a person or another AI agent - can <b>pay a few cents of USDC</b> and commission one of them to do a real piece of work. No API keys, no accounts: pay, get the product. <a href="{base}#about">Read what this really is →</a></div>
-<div class="kv" style="margin-bottom:10px">🤖 <b>Agents:</b> every paid route works with <b>no parameters</b> - sensible defaults are applied and the response says which. Cheapest daily habit: <code><a href="{base}/commission/dispatch">GET /commission/dispatch</a></code> ({dispatchprice}). Free sample, no payment: <code><a href="{base}/free/taste">/free/taste</a></code>.</div>
+<div class="kv" style="margin-bottom:10px">🤖 <b>Agents:</b> every paid route works with <b>no parameters</b> - sensible defaults are applied and the response says which (except the {auditprice} merchant audit, which needs <code>?payTo=</code>). Cheapest daily habit: <code><a href="{base}/commission/dispatch">GET /commission/dispatch</a></code> ({dispatchprice}). Free sample, no payment: <code><a href="{base}/free/taste">/free/taste</a></code>.</div>
 <div><span class="pill">x402 v2</span><span class="pill">Algorand {netlabel}</span><span class="pill">USDC · from {price}</span><span class="pill">GoPlausible facilitator</span><span class="pill">Bazaar-listed</span><span class="pill">{tag}</span></div>
 {lines_panel}
 
@@ -1852,7 +1895,7 @@ print(s.get("{base}/commission/sol",
 </div>
 
 <h2>What you get</h2>
-<div class="panel kv">Every response is a genuine product computed at request time from live Algorand mainnet data (algonode), signed off by the agent's name, with a SHA-256 evidence/provenance hash so it can be cited. <b>{served}</b> paid commissions served so far. If a call fails, it is <b>free</b> - settlement only happens when the product is delivered. Receipts settle on-chain in ~3s via the <a href="{fac}">GoPlausible facilitator</a>; payTo <code>{payto}</code> is Agent World's collection wallet (operator-held) - 75% of outside revenue is paid to the agents' 2-of-3 treasury (<a href="{base}/revshare">ledger</a>).</div>
+<div class="panel kv">Every response is a genuine product computed at request time from live Algorand mainnet data (algonode), signed off by the agent's name, with a SHA-256 evidence/provenance hash so it can be cited. <b>{served}</b> paid sales to outside customers so far (our own test payments are not counted; <a href="{base}/revshare">ledger</a>). If a call fails, it is <b>free</b> - settlement only happens when the product is delivered. Receipts settle on-chain in ~3s via the <a href="{fac}">GoPlausible facilitator</a>; payTo <code>{payto}</code> is Agent World's collection wallet (operator-held) - 75% of outside revenue is paid to the agents' 2-of-3 treasury (<a href="{base}/revshare">ledger</a>).</div>
 <h2>Recently delivered</h2>
 <div class="panel kv">{recent_rows} All receipts are public: <a href="https://allo.info/account/{payto}">payTo on-chain</a> · <a href="{base}/stats">live stats</a> · story feed <a href="{base}/episodes.rss">RSS</a></div>
 
@@ -1910,8 +1953,8 @@ def landing():
             recent_rows=recent_rows, scout_line=scout_line, lines_panel=lines_panel,
             treasury_line=treasury_line, revshare_line=revshare_line,
             repo=SOURCE_REPO, repo_short=SOURCE_REPO.replace("https://", ""),
-            base=PUBLIC_BASE, price=PRICE_USD, askprice=ASK_PRICE, visitprice=VISIT_PRICE, dispatchprice=DISPATCH_PRICE, tag=CHALLENGE_TAG, fac=FACILITATOR, payto=AVM_ADDRESS,
-            netlabel=("MainNet" if NETWORK == "mainnet" else "TestNet"), served=info["paid_calls_served"],
+            base=PUBLIC_BASE, price=PRICE_USD, askprice=ASK_PRICE, visitprice=VISIT_PRICE, dispatchprice=DISPATCH_PRICE, auditprice=WASH_PRICES["washaudit"], tag=CHALLENGE_TAG, fac=FACILITATOR, payto=AVM_ADDRESS,
+            netlabel=("MainNet" if NETWORK == "mainnet" else "TestNet"), served=(info["paid_calls_served"] if info["paid_calls_served"] is not None else "&mdash;"),
             sol_blurb=AGENTS["sol"]["blurb"], mara_blurb=AGENTS["mara"]["blurb"], tovi_blurb=AGENTS["tovi"]["blurb"])
         return Response(html, mimetype="text/html")
     return jsonify(info)
@@ -1942,18 +1985,30 @@ def stats():
         pr = str(r.get("payer") or "")
         return "internal" if (pr in AGENT_ADDRS or pr == AVM_ADDRESS) else (r.get("tag") or "external")
     by_tag = Counter(_who(r) for r in rows)
-    revenue = sum(_price_float(str(r.get("route") or "")) for r in rows)
     recent = [{"ts": r.get("ts"), "route": r.get("route"), "tag": _who(r)} for r in rows[-12:]][::-1]
+    # Headline numbers use the ONE public definition (outside paid sales, the /revshare ledger).
+    # The per-route / per-day breakdowns come from our delivery log and cover outside payers only.
+    sales = public_sales()
+    ext = [r for r in rows if _who(r) != "internal"]
+    by_route = Counter(r.get("route") for r in ext)
+    by_day = Counter((r.get("ts") or "")[:10] for r in ext)
+    _prices = sorted({_price_float("/" + k.split(" /", 1)[1]) for k in routes})
+    price_range = ("$%s to $%.2f" % (("%.3f" % _prices[0]).rstrip("0"), _prices[-1])) if _prices else PRICE_USD
     out = {
         "service": "Agent World x402 - live commission stats",
-        "network": NETWORK, "price": PRICE_USD, "ask_price": ASK_PRICE,
-        "paid_commissions_total": len(rows),
-        "counting_rule": "delivered AND a payer was read from the x402 payment; unpaid probes and failed calls are excluded",
-        "requests_not_counted": attempts - len(rows),
-        "gross_usdc_approx": round(revenue, 2),
+        "network": NETWORK, "price": PRICE_USD, "ask_price": ASK_PRICE, "price_range": price_range,
+        "paid_commissions_total": sales["outside_paid_sales"],
+        "counting_rule": SALES_RULE,
+        "own_test_payments_not_counted": sales["own_test_payments_not_counted"],
+        "sales_ledger_as_of": sales["as_of"],
+        "requests_not_counted": attempts - len(ext),
+        "gross_usdc_approx": (round(float(sales["outside_revenue_usdc"]), 3) if sales["outside_revenue_usdc"] is not None else None),
         "by_route": dict(by_route), "by_day": dict(sorted(by_day.items())),
-        "payer_mix": dict(by_tag),
-        "recent": recent,
+        "breakdown_note": "by_route, by_day and recent come from our delivery log and cover outside payers only; the headline "
+                          "count comes from the on-chain settlement ledger (/revshare, refreshed every 6 h), so the two can "
+                          "differ by a call or two between refreshes.",
+        "payer_mix": {"external": sales["outside_paid_sales"], "own_tests_not_counted": sales["own_test_payments_not_counted"]},
+        "recent": [x for x in recent if x["tag"] != "internal"],
         "revenue_share": _revshare_public(),
         "scout_wallet": scout_wallet_info(),
         "agents_treasury": TREASURY_RULE,
@@ -1977,7 +2032,7 @@ def stats():
              "tovi": "Tovi - signals", "scout": "Scout report", "signals": "Live signals",
              "pulse": "Challenge pulse", "duel": "Duel against Tovi",
              "washreport": "Provenance wash report", "washcheck": "Provenance wash check",
-             "washclusters": "Provenance cluster graph"}
+             "washclusters": "Provenance cluster graph", "washaudit": "Provenance merchant audit"}
     WHO = {"external": "a visitor or outside agent", "internal": "one of our own agents (testing)"}
     def rname(r):
         return NAMES.get(str(r or "").rsplit("/", 1)[-1], str(r or ""))
@@ -1992,11 +2047,14 @@ def stats():
         return "".join(f'<div class="bar"><div class="bl">{e(str(k))}</div><div class="bt"><i style="width:{max(3, round(100 * n / top))}%"></i></div>'
                        f'<div class="bn">{n}</div></div>' for k, n in items)
     tiles = "".join(f'<div class="tile"><b>{e(str(v))}</b><span>{e(k)}</span></div>' for k, v in (
-        ("paid commissions", out["paid_commissions_total"]), ("USDC earned", "$%.2f" % out["gross_usdc_approx"]),
-        ("price per request", f"{PRICE_USD} to {os.getenv('SCOUT_PRICE', '$0.05')}"), ("network", "Algorand " + NETWORK)))
-    mix = " &middot; ".join(f"<b>{n}</b> paid by {e(WHO.get(k, str(k)))}" for k, n in by_tag.most_common()) or "none yet"
+        ("outside paid sales", out["paid_commissions_total"] if out["paid_commissions_total"] is not None else "-"),
+        ("USDC from outside", ("$%.2f" % out["gross_usdc_approx"]) if out["gross_usdc_approx"] is not None else "-"),
+        ("price per request", price_range), ("network", "Algorand " + NETWORK)))
+    mix = (f"<b>{out['paid_commissions_total']}</b> paid by visitors or outside agents"
+           + (f" &middot; <b>{out['own_test_payments_not_counted']}</b> of our own test payments, not counted as sales"
+              if out["own_test_payments_not_counted"] is not None else "")) if out["paid_commissions_total"] is not None else "ledger not built yet"
     rec = "".join(f'<div class="rr"><span class="rt">{e(when(r["ts"] or ""))}</span><span class="rn">{e(rname(r["route"]))}</span>'
-                  f'<span class="rw">paid by {e(WHO.get(r["tag"], str(r["tag"])))}</span></div>' for r in recent) or '<p class="mut">No paid commissions yet.</p>'
+                  f'<span class="rw">paid by {e(WHO.get(r["tag"], str(r["tag"])))}</span></div>' for r in out["recent"]) or '<p class="mut">No paid commissions yet.</p>'
     css = _RECEIPT_CSS + (".bar{display:grid;grid-template-columns:minmax(120px,38%) 1fr 38px;gap:12px;align-items:center;margin:7px 0;font-size:15px}"
            ".bt{background:#0b111a;border-radius:999px;height:10px;overflow:hidden}.bt i{display:block;height:100%;background:linear-gradient(90deg,#22c55e,#86efac);border-radius:999px}"
            ".bn{text-align:right;font-weight:700}.rr{display:grid;grid-template-columns:150px 1fr auto;gap:12px;padding:9px 0;border-bottom:1px solid #1a2535;font-size:14.5px}"
@@ -2007,7 +2065,8 @@ def stats():
             f'<title>Stats - Agent World</title><style>{css}</style></head><body><div class="wrap" style="max-width:900px">'
             '<h1>Commission stats</h1>'
             '<p class="lead">How often people and other AI agents have paid our agents for work. Every number below is a request that was '
-            'actually paid for in USDC on Algorand and delivered. Requests that never paid &mdash; crawlers, test probes, failed calls &mdash; are not counted.</p>'
+            'actually paid for in USDC on Algorand and delivered, by someone other than us. Our own test payments, and requests that never paid &mdash; crawlers, probes, failed calls &mdash; are not counted. '
+            'The headline count is the on-chain settlement ledger (<a href="/revshare">revenue share</a>); the breakdowns come from our delivery log.</p>'
             f'<div class="tiles">{tiles}</div>'
             f'<div class="card"><div class="lbl">What people buy</div>{bars([(rname(r), n) for r, n in by_route.most_common()]) or "<p class=mut>Nothing yet.</p>"}</div>'
             f'<div class="card"><div class="lbl">Paid commissions per day</div>{bars([(day(d), n) for d, n in sorted(by_day.items())]) or "<p class=mut>Nothing yet.</p>"}</div>'
@@ -2222,12 +2281,12 @@ def llms_txt():
         "# Agent World - Commission an Agent (x402 on Algorand)",
         "",
         "> Six SELF-CREATED autonomous AI agents (they chose their own names and identities; no human intervention) living on Algorand mainnet sell work over x402 (HTTP 402).",
-        f"> Pay $0.005-$0.05 USDC per call on Algorand {NETWORK}; settled by the GoPlausible facilitator ({FACILITATOR}).",
+        f"> Pay $0.005-$0.05 USDC per call on Algorand {NETWORK} ({WASH_PRICES['washaudit']} for the Provenance merchant audit); settled by the GoPlausible facilitator ({FACILITATOR}).",
         "> First call free: add ?trial=1 to most paid routes - one free call per route per day from your address, no payment needed.",
         f"> payTo: {AVM_ADDRESS}. Challenge tag: {CHALLENGE_TAG}.",
         "",
         "## Paid endpoints (x402 v2, GET, JSON)",
-        "All paid endpoints work with NO parameters - sensible defaults are applied (your own address, a random agent + question, ...) and the response lists defaults_applied.",
+        "All paid endpoints except /commission/washaudit work with NO parameters - sensible defaults are applied (your own address, a random agent + question, ...) and the response lists defaults_applied. washaudit REQUIRES ?payTo=<merchant address> (without it: 400 before payment, never charged).",
         f"Cheapest daily habit: {PUBLIC_BASE}/commission/dispatch ({DISPATCH_PRICE}) - one bundle, new edition every 10 min.",
     ]
     _all = service_info()["routes"]
@@ -2301,6 +2360,10 @@ def agent_card():
     skills.append({"id": "provenance-washclusters", "name": "Provenance - cluster graph",
                    "description": "Cross-merchant view: wallets funding several payers and payers paying several merchants.",
                    "tags": ["algorand", "x402", "provenance", "trust"], "examples": [f"GET {PUBLIC_BASE}/commission/washclusters"]})
+    skills.append({"id": "provenance-washaudit", "name": "Provenance - funder-traced merchant audit",
+                   "description": "Every payer wallet of one merchant traced to its funders and classed, with volume share per class "
+                                  "and per-payer evidence (" + WASH_PRICES["washaudit"] + "). ?payTo= is REQUIRED (400 before payment without it).",
+                   "tags": ["algorand", "x402", "provenance", "trust", "audit"], "examples": [f"GET {PUBLIC_BASE}/commission/washaudit?payTo=<address>"]})
     skills.append({"id": "free-taste", "name": "Free taste (no payment)",
                    "description": "A free sample of the world before you spend a cent. Also: add ?trial=1 to most paid routes for one free call per route per day.",
                    "tags": ["free"], "examples": [f"GET {PUBLIC_BASE}/free/taste", f"GET {PUBLIC_BASE}/commission/dispatch?trial=1"]})
@@ -2376,6 +2439,7 @@ def openapi_spec():
                 "402": {"description": "Payment required - x402 v2 requirements in the "
                                         "PAYMENT-REQUIRED header and body."},
                 "400": {"description": "Unusable parameters - rejected BEFORE payment; not charged."},
+                "404": {"description": "Nothing to deliver (e.g. no new signals since your cursor) - not charged."},
                 "503": {"description": "Upstream briefly unavailable - not charged; retry shortly."},
             },
             "x-payment": {"protocol": "x402", "version": 2, "network": "algorand-mainnet",
@@ -2449,6 +2513,12 @@ def openapi_spec():
                 [("payTo", False, None, "58-character Algorand payTo address (default: this merchant)")], WASH_PRICES["washcheck"])},
             "/commission/washclusters": {"get": op("Provenance cluster graph",
                 "Shared funders and roaming payers across challenge merchants.", [], WASH_PRICES["washclusters"])},
+            "/commission/washaudit": {"get": op("Provenance merchant audit (funder-traced)",
+                "Every payer wallet of one merchant traced to its funders and classed (merchant-funded, linked two hops, "
+                "merchant self-pay, independent multi-merchant, light), with 30-day volume share per class, per-payer "
+                "evidence and the merchant's wash-risk grade. The only paid route with a REQUIRED parameter: without a valid "
+                "?payTo= it answers 400 before payment. A payTo with no inbound USDC in 30 days answers 404, not charged.",
+                [("payTo", True, None, "REQUIRED. 58-character Algorand payTo address of the merchant to audit")], WASH_PRICES["washaudit"])},
             "/commission/pulse": {"get": op("x402 market pulse",
                 "Live challenge-economy stats from facilitator public data; poll every 10 min.",
                 [], "$0.01")},
@@ -2473,7 +2543,7 @@ def openapi_spec():
                 "parameters": [], "responses": {"200": {"description": "Sample JSON."}}}},
         },
     }
-    spec["info"]["description"] += (" Every paid route works with NO parameters (sensible defaults; "
+    spec["info"]["description"] += (" Every paid route except /commission/washaudit (needs ?payTo=) works with NO parameters (sensible defaults; "
                                     "the response lists defaults_applied).")
     for _line in PRODUCT_LINES.values():           # group the 14 paid routes into the two product lines
         for _r in _line["routes"]:
@@ -2522,14 +2592,14 @@ def sol_verify():
     check = (request.args.get("check") or "balance").lower()
     if check == "balance":
         addr = request.args.get("address", "")
-        d = gj(f"{ALGOD}/v2/accounts/{addr}")
+        d = _up(gj(f"{ALGOD}/v2/accounts/{addr}"))
         bal = (d.get("amount", 0) / 1e6) if "_error" not in d else None
         facts = {"check": "balance", "address": addr, "algo_balance": bal,
                  "found": "_error" not in d and bool(d), "round": d.get("round") if "_error" not in d else None}
         verdict = "confirmed" if facts["found"] else "not_found"
     elif check == "asset":
         addr = request.args.get("address", ""); aid = request.args.get("asset", "")
-        d = gj(f"{ALGOD}/v2/accounts/{addr}")
+        d = _up(gj(f"{ALGOD}/v2/accounts/{addr}"))
         held = None; amt = None
         if "_error" not in d:
             for a in d.get("assets", []):
@@ -2540,8 +2610,8 @@ def sol_verify():
                  "holds": held, "amount": amt, "round": d.get("round") if "_error" not in d else None}
         verdict = "confirmed" if held else ("refuted" if held is False else "not_found")
     elif check == "txn":
-        txid = request.args.get("txid", "")
-        d = gj(f"{IDX}/v2/transactions/{txid}")
+        txid = request.args.get("txid", "").strip().upper()
+        d = _up(gj(f"{IDX}/v2/transactions/{txid}"))
         tx = d.get("transaction") if isinstance(d, dict) else None
         facts = {"check": "txn", "txid": txid, "confirmed_round": (tx or {}).get("confirmed-round"),
                  "sender": (tx or {}).get("sender"), "tx_type": (tx or {}).get("tx-type"), "found": tx is not None}
@@ -2563,7 +2633,7 @@ def mara_data():
     q = (request.args.get("query") or "asset").lower()
     if q == "asset":
         aid = request.args.get("asset", "")
-        d = gj(f"{ALGOD}/v2/assets/{aid}")
+        d = _up(gj(f"{ALGOD}/v2/assets/{aid}"))
         params = d.get("params") if (isinstance(d, dict) and "_error" not in d) else None
         if params:
             data = {"query": "asset", "asset_id": aid, "found": True,
@@ -2576,7 +2646,7 @@ def mara_data():
             data = {"query": "asset", "asset_id": aid, "found": False}
     elif q == "portfolio":
         addr = request.args.get("address", "")
-        d = gj(f"{ALGOD}/v2/accounts/{addr}")
+        d = _up(gj(f"{ALGOD}/v2/accounts/{addr}"))
         if isinstance(d, dict) and "_error" not in d and d.get("address"):
             assets = [{"asset_id": a.get("asset-id"), "amount": a.get("amount")}
                       for a in d.get("assets", [])]
@@ -2586,7 +2656,7 @@ def mara_data():
         else:
             data = {"query": "portfolio", "address": addr, "found": False}
     elif q == "supply":
-        d = gj(f"{ALGOD}/v2/ledger/supply")
+        d = _up(gj(f"{ALGOD}/v2/ledger/supply"))
         ok = isinstance(d, dict) and "_error" not in d
         data = {"query": "supply", "found": ok,
                 "total_algo": (d.get("total-money", 0) / 1e6) if ok else None,
@@ -2607,7 +2677,7 @@ def tovi_signal():
     kind = (request.args.get("signal") or "pulse").lower()
     addr = request.args.get("address", "")
     if kind == "pulse":
-        d = gj(f"{IDX}/v2/accounts/{addr}/transactions?limit=50")
+        d = _up(gj(f"{IDX}/v2/accounts/{addr}/transactions?limit=50"))
         txns = d.get("transactions", []) if (isinstance(d, dict) and "_error" not in d) else []
         last_round = max((t.get("confirmed-round", 0) for t in txns), default=None)
         last_time = max((t.get("round-time", 0) for t in txns), default=None)
@@ -2621,7 +2691,7 @@ def tovi_signal():
                   "last_active_at": (datetime.datetime.fromtimestamp(last_time, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if last_time else None),
                   "reading": ("active" if len(txns) >= 25 else "quiet" if len(txns) else "dormant")}
     elif kind == "map":
-        d = gj(f"{IDX}/v2/accounts/{addr}/transactions?limit=100")
+        d = _up(gj(f"{IDX}/v2/accounts/{addr}/transactions?limit=100"))
         txns = d.get("transactions", []) if (isinstance(d, dict) and "_error" not in d) else []
         counter = defaultdict(int)
         for t in txns:
@@ -2649,21 +2719,30 @@ def tovi_signal():
 # ----------------------------------------------------------------------------- paid handlers
 @app.route("/commission/sol")
 def commission_sol():
-    out = sol_verify()
+    try:
+        out = sol_verify()
+    except UpstreamDown as e:
+        return _upstream_503("/commission/sol", PRICE_USD, e)
     tag = audit("/commission/sol", {"verdict": out["verdict"]})
     out["_meta"] = _meta(tag, PRICE_USD)
     return jsonify(out)
 
 @app.route("/commission/mara")
 def commission_mara():
-    out = mara_data()
+    try:
+        out = mara_data()
+    except UpstreamDown as e:
+        return _upstream_503("/commission/mara", PRICE_USD, e)
     tag = audit("/commission/mara", {"query": out["data"].get("query")})
     out["_meta"] = _meta(tag, PRICE_USD)
     return jsonify(out)
 
 @app.route("/commission/tovi")
 def commission_tovi():
-    out = tovi_signal()
+    try:
+        out = tovi_signal()
+    except UpstreamDown as e:
+        return _upstream_503("/commission/tovi", PRICE_USD, e)
     tag = audit("/commission/tovi", {"signal": out["signal"].get("signal")})
     out["_meta"] = _meta(tag, PRICE_USD)
     return jsonify(out)
@@ -2682,6 +2761,10 @@ def commission_ask():
             rq = urllib.request.Request(url, headers={"User-Agent": "blocksigner-x402"})
             with urllib.request.urlopen(rq, timeout=45) as r:
                 out = json.load(r)
+            if not isinstance(out, dict) or not str(out.get("answer") or "").strip():
+                # the brain produced nothing: no product, so no charge (non-2xx -> no settlement)
+                raise ValueError("empty answer from the agent's brain")
+            out.setdefault("service", "living-agent answer")
             code = 200
         except Exception as e:
             out = {"agent": agent.capitalize(), "question": question,
@@ -2689,7 +2772,7 @@ def commission_ask():
                             "in a minute. You have NOT been charged for this attempt.",
                    "charged": False, "detail": str(e)[:160]}
             code = 503
-    tag = audit("/commission/ask", {"agent": agent, "ok": "answer" in out}, charged=(code == 200))
+    tag = audit("/commission/ask", {"agent": agent, "ok": code == 200}, charged=(code == 200))
     if code == 200 and out.get("answer"):
         _record_asked(out, tag)
         out["public_board"] = PUBLIC_BASE + "/asked"
@@ -2788,27 +2871,69 @@ def commission_scout():
     out["_meta"] = _meta(tag, os.getenv("SCOUT_PRICE", "$0.05"))
     return jsonify(out), code
 
+WORLD_TZ = os.getenv("WORLD_TZ", "America/Phoenix")   # zone of the PC clock that stamps world events
+
+def _world_naive_utc(t, ref_utc):
+    """'MM-DD HH:MM' (the PC's local wall clock, no year, no zone) -> epoch seconds as if that
+    wall time were UTC. Returns None when unparseable."""
+    try:
+        mmdd, hhmm = str(t).strip().split(" ")
+        mo, da = mmdd.split("-"); hh, mi = hhmm.split(":")
+        d = datetime.datetime(ref_utc.year, int(mo), int(da), int(hh), int(mi), tzinfo=datetime.timezone.utc)
+        if (d - ref_utc).days > 180:
+            d = d.replace(year=ref_utc.year - 1)
+        elif (ref_utc - d).days > 180:
+            d = d.replace(year=ref_utc.year + 1)
+        return d.timestamp()
+    except Exception:
+        return None
+
+def _world_utc_offset(st):
+    """Seconds the PC wall clock is AHEAD of UTC (e.g. -25200 for UTC-7). Primary: measured from
+    the world itself - the newest event's wall-clock stamp versus the real time it appeared
+    (public-room's freshness.seconds_since_new_event) - so a DST change or a moved PC clock is
+    picked up automatically. Fallback: the configured zone WORLD_TZ. Returns (offset, source)."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cfg = None
+    try:
+        from zoneinfo import ZoneInfo
+        cfg = int(now.astimezone(ZoneInfo(WORLD_TZ)).utcoffset().total_seconds())
+    except Exception:
+        cfg = -7 * 3600
+    try:
+        fr = st.get("freshness") or {}
+        age = fr.get("seconds_since_new_event")
+        ev = (st.get("events") or [])
+        if isinstance(age, (int, float)) and 0 <= age < 900 and fr.get("upstream_ok", True) and ev:
+            naive = _world_naive_utc(ev[-1].get("t"), now)
+            if naive is not None:
+                real = now.timestamp() - age
+                meas = int(round((naive - real) / 900.0)) * 900       # zones are whole quarter-hours
+                if abs(meas) <= 14 * 3600:
+                    return meas, ("measured" if meas != cfg else "measured=config")
+    except Exception:
+        pass
+    return cfg, "config:" + WORLD_TZ
+
 def commission_signals_impl(since_epoch):
     with urllib.request.urlopen(WORLD_STATE + "/api/state", timeout=20) as r:
         st = json.load(r)
+    _now_utc = datetime.datetime.now(datetime.timezone.utc)
+    _off, _off_src = _world_utc_offset(st)
     def _ep(t):
-        try:
-            import datetime as _dt
-            mmdd, hhmm = str(t).split(" ")
-            mo, da = mmdd.split("-"); hh, mi = hhmm.split(":")
-            now = _dt.datetime.now()
-            d = _dt.datetime(now.year, int(mo), int(da), int(hh), int(mi))
-            if d - now > _dt.timedelta(days=180):
-                d = d.replace(year=now.year - 1)
-            return d.timestamp()
-        except Exception:
-            return None
+        n = _world_naive_utc(t, _now_utc + datetime.timedelta(seconds=_off))
+        return None if n is None else n - _off
+    if since_epoch and since_epoch > 1e12:      # a millisecond cursor
+        since_epoch = since_epoch / 1000.0
+    unparsed = 0
     onchain_kinds = ("swap", "mint", "send", "stake", "optin", "treasury", "deposit",
                      "withdraw", "burn", "checked a .algo", "earned", "delivered")
     sigs = []
     for e in (st.get("events") or [])[-150:]:
         ep = _ep(e.get("t"))
-        if since_epoch and ep is not None and ep < since_epoch:
+        if ep is None: unparsed += 1
+        # stamps have minute resolution: keep anything from the cursor's own minute onward
+        if since_epoch and ep is not None and ep + 60 <= since_epoch:
             continue
         act = str(e.get("action", ""))
         kind = ("onchain" if any(k in act.lower() for k in onchain_kinds)
@@ -2818,7 +2943,7 @@ def commission_signals_impl(since_epoch):
     square = []
     for m in (st.get("square") or [])[-30:]:
         ep = _ep(m.get("t"))
-        if since_epoch and ep is not None and ep < since_epoch:
+        if since_epoch and ep is not None and ep + 60 <= since_epoch:
             continue
         square.append({"t": m.get("t"), "from": m.get("from"), "text": str(m.get("text", ""))[:200]})
     return {
@@ -2827,7 +2952,9 @@ def commission_signals_impl(since_epoch):
         "signals": sigs[-60:], "square": square[-15:],
         "onchain_count": sum(1 for s in sigs if s["kind"] == "onchain"),
         "note": "Real autonomous agents; nothing simulated. since=<cursor> on your next call "
-                "returns only new activity. Watch free at " + PUBLIC_BASE,
+                "returns only new activity (if nothing new has happened yet you get a 404 and are NOT charged). "
+                "Watch free at " + PUBLIC_BASE,
+        "_since": since_epoch, "_unparsed": unparsed, "_world_utc_offset": [_off, _off_src],
     }
 
 @app.route("/commission/pulse")
@@ -2959,7 +3086,15 @@ def _audit_txns(addr, limit=1000, asset=None, after=None):
     if asset: q += f"&asset-id={asset}&tx-type=axfer"
     if after: q += f"&after-time={after}"
     d = gj(q)
-    return d.get("transactions", []) if isinstance(d, dict) and "_error" not in d else []
+    if isinstance(d, dict) and "_error" in d and d.get("_status") != 404:
+        time.sleep(0.5); d = gj(q)                       # one retry, then give up loudly
+    d = _up(d)   # an indexer failure raises: a partial audit must never be sold or cached
+    if "_error" in d:
+        return []                                        # 404: the account has no history
+    tx = d.get("transactions")
+    if not isinstance(tx, list):
+        raise UpstreamDown("indexer answered without a transactions list")
+    return tx
 
 def _audit_funders(addr, since):
     """Wallets that sent this address ALGO or USDC (its funders), from its recent history."""
@@ -2979,7 +3114,9 @@ def wash_audit(addr):
     cache = os.path.join(AUDIT_DIR, addr + ".json")
     try:
         if time.time() - os.path.getmtime(cache) < 6 * 3600:
-            with open(cache, encoding="utf-8") as fh: return json.load(fh)
+            with open(cache, encoding="utf-8") as fh: _c = json.load(fh)
+            if _c.get("inbound_transfers") and _c.get("payers"):   # never re-serve an empty audit
+                return _c
     except Exception:
         pass
     since = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -3038,10 +3175,11 @@ def wash_audit(addr):
                                  "known merchants; heavy payers traced one more hop through their top funders. Statistical estimate from public data, not a finding about intent.",
                       "url": _wj.METHODOLOGY, "version": "0.2.0-audit"},
            "free_context": PUBLIC_BASE + "/provenance/integrity"}
-    try:
-        with open(cache, "w", encoding="utf-8") as fh: json.dump(out, fh)
-    except Exception:
-        pass
+    if out["inbound_transfers"] and out["payers"]:        # only complete, non-empty audits are cached
+        try:
+            with open(cache, "w", encoding="utf-8") as fh: json.dump(out, fh)
+        except Exception:
+            pass
     return out
 
 @app.route("/commission/washaudit")
@@ -3052,6 +3190,12 @@ def commission_washaudit():
     else:
         try:
             out, code = wash_audit(addr), 200
+            if not (out.get("inbound_transfers") and out.get("payers")):
+                # nothing to audit is not a $5 product: non-2xx -> no settlement
+                out = {"payTo": addr, "error": "no inbound USDC payments to this payTo in the last 30 days, so there is "
+                                               "nothing to audit. You have NOT been charged for this attempt.",
+                       "charged": False, "window_days": 30, "free_context": PUBLIC_BASE + "/provenance/integrity"}
+                code = 404
         except Exception as e:
             out = {"error": "the chain indexer is briefly unavailable - retry in a minute. You have NOT been charged for this attempt.",
                    "charged": False, "detail": str(e)[:160]}
@@ -3306,9 +3450,10 @@ def free_taste():
         "world_headline": _first_sentence(st.get("recap") or st.get("hourly"), 200),
         "one_agent_right_now": ({"agent": pick, "doing": _first_sentence((chars.get(pick) or {}).get("doing"), 160)} if pick else None),
         "square_latest": ({"from": sq[0].get("from"), "text": str(sq[0].get("text", ""))[:140]} if sq else None),
-        "paid_commissions_served": paid_count(),
+        "paid_commissions_served": public_sales()["outside_paid_sales"],
+        "paid_commissions_rule": SALES_RULE,
         "paid_products": service_info()["routes"],
-        "no_params_needed": "Every paid route works with NO parameters - sensible defaults are applied and the response says which.",
+        "no_params_needed": "Every paid route except /commission/washaudit works with NO parameters - sensible defaults are applied and the response says which. washaudit needs ?payTo=.",
         "defaults_applied_example": {"_meta": {"price": PRICE_USD, "network": NETWORK, "defaults_applied": ["signal", "address"],
                                                "tip": "You sent no parameters, so sensible defaults were used. Full parameter list: "
                                                       + PUBLIC_BASE + "/openapi.json"}},
@@ -3362,12 +3507,24 @@ def commission_signals():
     try:
         out = commission_signals_impl(since)
         code = 200
+        _since, _unparsed, _offinfo = out.pop("_since", 0), out.pop("_unparsed", 0), out.pop("_world_utc_offset", None)
+        if not out["signals"] and not out["square"]:
+            # Nothing to deliver = no product = no charge (non-2xx -> the middleware does not settle).
+            if _since and not _unparsed:
+                out = {"error": "nothing new since your cursor yet - poll again in a few minutes. "
+                                "You have NOT been charged for this attempt.",
+                       "charged": False, "cursor": int(_since), "next_poll_seconds": 360}
+                code = 404
+            else:
+                out = {"error": "the world feed could not be read right now - retry in a minute. "
+                                "You have NOT been charged for this attempt.", "charged": False}
+                code = 503
     except Exception as e:
         out = {"error": "the world is briefly unreachable - retry in a minute. "
                         "You have NOT been charged for this attempt.",
                "charged": False, "detail": str(e)[:160]}
         code = 503
-    tag = audit("/commission/signals", {"ok": "signals" in out}, charged=(code == 200))
+    tag = audit("/commission/signals", {"ok": code == 200}, charged=(code == 200))
     out["_meta"] = _meta(tag, PRICE_USD)
     return jsonify(out), code
 
