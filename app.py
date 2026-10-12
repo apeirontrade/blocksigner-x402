@@ -86,6 +86,8 @@ VISIT_PRICE = os.getenv("VISIT_PRICE", "$0.02")
 ROUTE_PRICES = {"/commission/ask": None, "/commission/visit": None, "/commission/scout": None}
 DISPATCH_PRICE = os.getenv("DISPATCH_PRICE", "$0.01")
 PULSE_PRICE = "$0.01"
+TICK_PRICE = os.getenv("TICK_PRICE", "$0.001")
+DATASET_PRICE = os.getenv("DATASET_PRICE", "$0.50")
 WASH_PRICES = {"washreport": os.getenv("WASHREPORT_PRICE", "$0.02"), "washcheck": os.getenv("WASHCHECK_PRICE", "$0.005"),
                "washclusters": os.getenv("WASHCLUSTERS_PRICE", "$0.05"), "washaudit": os.getenv("WASHAUDIT_PRICE", "$5.00")}
 def route_price(route):
@@ -97,6 +99,8 @@ def route_price(route):
     if route.endswith("/scout"): return os.getenv("SCOUT_PRICE", "$0.05")
     if route.endswith("/dispatch"): return DISPATCH_PRICE
     if route.endswith("/pulse"): return PULSE_PRICE
+    if route.endswith("/tick"): return TICK_PRICE
+    if route.endswith("/dataset"): return DATASET_PRICE
     return PRICE_USD
 
 def _price_float(route):
@@ -516,8 +520,6 @@ def audit(route, result_summary, charged=True):
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "")
 def _notify_sale(route, rec):
     """Push a phone notification for every paid commission (fire-and-forget)."""
-    if not NTFY_TOPIC:
-        return
     def _push():
         try:
             price = route_price(route)
@@ -1053,6 +1055,40 @@ routes["GET /commission/washaudit"] = paid_route(
     price=WASH_PRICES["washaudit"],
 )
 
+routes["GET /commission/tick"] = paid_route(
+    "tick",
+    "You get: the smallest live snapshot of the Agent World - current Algorand round, the world headline, the six "
+    "agents' total ALGO and the treasury balance, in one tiny JSON. First call free: add ?trial=1. "
+    "WORLD TICK - the cheapest heartbeat on the board: poll it to know the world is alive before buying anything "
+    "bigger. No parameters; fresh every couple of minutes, cached for speed.",
+    {},
+    {"properties": {}},
+    {"service": "World Tick - Agent World's smallest live snapshot", "as_of": "2026-10-12T22:00:00Z",
+     "algorand_round": 65926802, "headline": "Six agents debate registering their town's .algo name.",
+     "agents": 6, "agents_total_algo": 12.4, "treasury_algo": 0.94,
+     "upgrade": {"daily_bundle": "https://blocksigner.org/commission/dispatch",
+                 "live_feed": "https://blocksigner.org/commission/signals"}},
+    {"properties": {"algorand_round": {"type": ["integer", "null"]}, "headline": {"type": "string"},
+                    "treasury_algo": {"type": ["number", "null"]}}, "required": ["headline"]},
+    price=TICK_PRICE,
+)
+routes["GET /commission/dataset"] = paid_route(
+    "dataset",
+    "You get: the full Provenance research dataset in one call - every graded merchant row of the Algorand x402 "
+    "Challenge wash report (A-F, claimed vs organic-adjusted volume, indicators, top payers), the cross-merchant "
+    "cluster graph, the latest payer-class integrity aggregates and the published methodology. "
+    "PROVENANCE DATASET - the research-grade bundle behind blocksigner.org/provenance, built for analysis, "
+    "citation and audit. Attribution requested. No parameters; rebuilt every few hours.",
+    {},
+    {"properties": {}},
+    {"service": "Provenance dataset", "as_of": "2026-10-12T21:23:00Z",
+     "merchants": [_WASH_ROW], "clusters": {"shared_funders": [], "roaming_payers": []},
+     "integrity_latest": {"linked_share_pct": 77.4, "merchants": 60},
+     "methodology": "published method + limitations included"},
+    {"properties": {"merchants": {"type": "array"}, "clusters": {"type": "object"}}, "required": ["merchants"]},
+    price=DATASET_PRICE,
+)
+
 for _rk, _rc in routes.items():
     ROUTE_DESCRIPTIONS["/" + _rk.split(" /", 1)[1]] = _rc.description
 
@@ -1099,7 +1135,7 @@ def _precheck_params(path, q):
     elif path == "/commission/duel":
         if (q.get("call") or "").strip().lower() not in ("up", "down", "auto"):
             return "call must be up or down: ?call=up|down (omit it to take the contrarian side of Tovi's call)"
-    elif path in ("/commission/washreport", "/commission/washclusters"):
+    elif path in ("/commission/washreport", "/commission/washclusters", "/commission/dataset"):
         if not wash_fresh():
             return "the wash report is being rebuilt right now - retry in a few minutes"
     elif path == "/commission/watch":
@@ -1183,7 +1219,7 @@ def _meta(tag, price):
 
 TRIAL_PATHS = {"/commission/sol", "/commission/mara", "/commission/tovi", "/commission/ask", "/commission/episode",
                "/commission/pulse", "/commission/signals", "/commission/dispatch", "/commission/washreport",
-               "/commission/washcheck"}
+               "/commission/washcheck", "/commission/tick"}
 TRIALS = os.path.join(DATA_DIR, "trials.json")
 TRIAL_PER_ROUTE_SECONDS = 86400
 TRIAL_PER_IP_PER_DAY = 3
@@ -1708,12 +1744,12 @@ TREASURY_RULE = {
     "explorer": "https://allo.info/account/" + TREASURY_ADDR,
 }
 PRODUCT_LINES = {
-    "agent_world": {"label": "Agent World (11)", "what": "hire the six living agents - $0.005 to $0.05",
+    "agent_world": {"label": "Agent World (12)", "what": "hire the six living agents - $0.001 to $0.05",
                     "routes": ["/commission/sol", "/commission/mara", "/commission/tovi", "/commission/ask",
                                "/commission/visit", "/commission/episode", "/commission/scout", "/commission/pulse",
-                               "/commission/duel", "/commission/signals", "/commission/dispatch"]},
-    "provenance": {"label": "Provenance (4)", "what": "wash-trading ratings and funder-traced audits for Algorand x402 merchants - $0.005 to $5.00",
-                   "routes": ["/commission/washreport", "/commission/washcheck", "/commission/washclusters", "/commission/washaudit"]},
+                               "/commission/duel", "/commission/signals", "/commission/dispatch", "/commission/tick"]},
+    "provenance": {"label": "Provenance (5)", "what": "wash-trading ratings, funder-traced audits and the full research dataset for Algorand x402 merchants - $0.005 to $5.00",
+                   "routes": ["/commission/washreport", "/commission/washcheck", "/commission/washclusters", "/commission/washaudit", "/commission/dataset"]},
 }
 _chain_cache = {}
 def _acct_cached(addr, ttl=300):
@@ -1769,6 +1805,8 @@ def service_info():
             "/commission/washclusters": f"PROVENANCE CLUSTER GRAPH - shared funders and roaming payers across challenge merchants ({WASH_PRICES['washclusters']}; no params).",
             "/commission/washaudit": f"PROVENANCE MERCHANT AUDIT - every payer wallet of one merchant traced to its funders and classed (merchant-funded, linked, self, independent, light), with volume share per class and per-payer evidence ({WASH_PRICES['washaudit']}; ?payTo=<58-char merchant address> is REQUIRED - the one route with no default; a call without it gets a 400 before payment and is never charged; not charged either if the payTo received no USDC in 30 days).",
             "/commission/dispatch": f"DAILY DISPATCH - headline, every agent's state + balance, Tovi's ALGO call, treasury, square + key events, an on-chain fact, in ONE bundle ({DISPATCH_PRICE}; no params; new edition every 10 min - built for scheduled agents).",
+            "/commission/tick": f"WORLD TICK - the smallest live snapshot: Algorand round, world headline, agent + treasury balances ({TICK_PRICE}; no params; the cheapest route on the board - poll it before buying bigger).",
+            "/commission/dataset": f"PROVENANCE DATASET - the full research bundle: every graded merchant, the cluster graph, payer-class integrity aggregates and the methodology, in one call ({DATASET_PRICE}; no params; attribution to blocksigner.org/provenance requested).",
         },
         "product_lines": PRODUCT_LINES,
         "no_params_needed": "Every paid route except /commission/washaudit works with NO parameters (sensible defaults; the response lists defaults_applied). washaudit needs ?payTo=.",
@@ -2032,7 +2070,8 @@ def stats():
              "tovi": "Tovi - signals", "scout": "Scout report", "signals": "Live signals",
              "pulse": "Challenge pulse", "duel": "Duel against Tovi",
              "washreport": "Provenance wash report", "washcheck": "Provenance wash check",
-             "washclusters": "Provenance cluster graph", "washaudit": "Provenance merchant audit"}
+             "washclusters": "Provenance cluster graph", "washaudit": "Provenance merchant audit",
+             "tick": "World tick", "dataset": "Provenance dataset"}
     WHO = {"external": "a visitor or outside agent", "internal": "one of our own agents (testing)"}
     def rname(r):
         return NAMES.get(str(r or "").rsplit("/", 1)[-1], str(r or ""))
@@ -2538,6 +2577,13 @@ def openapi_spec():
             "/commission/dispatch": {"get": op("Daily Dispatch - the world's morning bundle",
                 "Headline, every agent's state + balance, Tovi's ALGO call, treasury, square, key "
                 "events and an on-chain fact. No parameters; new edition every 10 min.", [], DISPATCH_PRICE)},
+            "/commission/tick": {"get": op("World tick - smallest live snapshot",
+                "Current Algorand round, world headline, agent and treasury balances; the cheapest route on the menu. "
+                "No parameters.", [], TICK_PRICE)},
+            "/commission/dataset": {"get": op("Provenance dataset - full research bundle",
+                "Every graded challenge merchant, the cluster graph, payer-class integrity aggregates and the "
+                "methodology in one call. No parameters; attribution to blocksigner.org/provenance requested.",
+                [], DATASET_PRICE)},
             "/free/taste": {"get": {"summary": "Free taste (no payment)",
                 "description": "A free, no-parameter sample of the world and the product list.",
                 "parameters": [], "responses": {"200": {"description": "Sample JSON."}}}},
@@ -3025,6 +3071,38 @@ def commission_dispatch():
     out["_meta"] = _meta(tag, DISPATCH_PRICE)
     return jsonify(out), code
 
+_tick_cache = {"t": 0.0, "v": None}
+
+@app.route("/commission/tick")
+def commission_tick():
+    global _tick_cache
+    try:
+        if time.time() - _tick_cache["t"] > 120 or not _tick_cache["v"]:
+            with urllib.request.urlopen(WORLD_STATE + "/api/state", timeout=10) as r:
+                st = json.load(r)
+            status = gj(f"{ALGOD}/v2/status")
+            agents = st.get("agents") or []
+            tre = st.get("treasury") or {}
+            _tick_cache = {"t": time.time(), "v": {
+                "service": "World Tick - Agent World's smallest live snapshot",
+                "as_of": now_iso(),
+                "algorand_round": (status or {}).get("last-round"),
+                "headline": _first_sentence(st.get("recap") or st.get("hourly"), 200),
+                "agents": len(agents),
+                "agents_total_algo": round(sum(float(a.get("balance") or 0) for a in agents), 3),
+                "treasury_algo": tre.get("balance"),
+                "upgrade": {"daily_bundle": PUBLIC_BASE + "/commission/dispatch",
+                            "live_feed": PUBLIC_BASE + "/commission/signals"}}}
+        out = dict(_tick_cache["v"]); code = 200
+    except Exception as e:
+        out = {"error": "the world is briefly unreachable - retry in a minute. "
+                        "You have NOT been charged for this attempt.",
+               "charged": False, "detail": str(e)[:120]}
+        code = 503
+    tag = audit("/commission/tick", {"ok": code == 200}, charged=(code == 200))
+    out["_meta"] = _meta(tag, TICK_PRICE)
+    return jsonify(out), code
+
 _WASH_KEEP = ("service", "as_of", "chain", "asset", "scope", "headline", "this_operator", "method", "limitations")
 _WASH_READING = ("Statistical estimate from public on-chain data using the published methodology; "
                  "it is not a finding about any operator's intent.")
@@ -3047,6 +3125,39 @@ def commission_washreport():
         code = 200
     tag = audit("/commission/washreport", {"ok": code == 200}, charged=(code == 200))
     out["_meta"] = _meta(tag, WASH_PRICES["washreport"])
+    return jsonify(out), code
+
+def _integrity_latest():
+    try:
+        with open(os.path.join(DATA_DIR, "integrity_history.jsonl"), encoding="utf-8") as f:
+            rows = [json.loads(x) for x in f if x.strip()]
+        return rows[-1] if rows else None
+    except Exception:
+        return None
+
+@app.route("/commission/dataset")
+def commission_dataset():
+    rep = wash_report() if wash_fresh() else None
+    if not rep:
+        out = {"error": "the dataset is being rebuilt - retry in a few minutes. "
+                        "You have NOT been charged for this attempt.", "charged": False}
+        code = 503
+    else:
+        out = {"service": "Provenance dataset - Algorand x402 Challenge (full research bundle)",
+               "as_of": rep.get("as_of"), "chain": rep.get("chain"), "asset": rep.get("asset"),
+               "scope": rep.get("scope"), "headline": rep.get("headline"),
+               "merchants": rep.get("merchants") or [],
+               "clusters": rep.get("clusters") or {},
+               "integrity_latest": _integrity_latest(),
+               "this_operator": rep.get("this_operator"),
+               "method": rep.get("method"), "methodology": _wj.METHODOLOGY,
+               "limitations": rep.get("limitations"),
+               "reading": _WASH_READING,
+               "attribution": "Free to analyze, cite and republish with attribution to blocksigner.org/provenance.",
+               "publisher": "Apeiron Capital Inc."}
+        code = 200
+    tag = audit("/commission/dataset", {"ok": code == 200}, charged=(code == 200))
+    out["_meta"] = _meta(tag, DATASET_PRICE)
     return jsonify(out), code
 
 @app.route("/commission/washcheck")
@@ -3352,9 +3463,39 @@ table.integ td.num,table.integ th.num{{text-align:right;font-variant-numeric:tab
 <div class="card"><div class="lbl">Our own entry</div><p><b>Grade {e(str(op.get('grade', '')))}</b>. {e(op.get('statement', ''))}</p></div>
 <div class="card"><div class="lbl">Caveats</div><ul class="ul">{cav}</ul></div>
 <div class="card"><div class="lbl">Per-merchant detail</div><p>Every graded merchant, A to F, with indicators and top payers: <a href="{e(PUBLIC_BASE)}/commission/washreport">full report</a> ({e(WASH_PRICES['washreport'])}). Check one merchant before you pay it: <a href="{e(PUBLIC_BASE)}/commission/washcheck">washcheck</a> ({e(WASH_PRICES['washcheck'])}; first call free with ?trial=1). Machine-readable copy of this page: <a href="{e(PUBLIC_BASE)}/provenance/integrity.json">integrity.json</a>.</p></div>
+<div class="card"><div class="lbl">Badge &amp; dataset</div><p>Any merchant can embed its live grade: <code>&lt;img src="{e(PUBLIC_BASE)}/provenance/badge/&lt;payTo&gt;.svg"&gt;</code> (free, cached 3 hours, grey "unrated" if not on the board). Researchers: the full graded dataset - every merchant row, the cluster graph, payer-class aggregates and the methodology - is one call at <a href="{e(PUBLIC_BASE)}/commission/dataset">/commission/dataset</a> ({e(DATASET_PRICE)}); cite it as blocksigner.org/provenance.</p></div>
 <p class="mut" style="font-size:13px">Published by Apeiron Capital Inc. Statistical estimates from public data, not findings about any operator's intent. As of {e(str(r.get('as_of', '')))}.</p>
 </div></body></html>"""
     return Response(page, mimetype="text/html")
+
+@app.route("/provenance/badge/<pay_to>.svg")
+def provenance_badge(pay_to):
+    """FREE embeddable wash-risk badge for any graded merchant - live grade, cached 3h."""
+    pay_to = (pay_to or "").strip().upper()
+    rep = wash_report() or {}
+    row = next((r for r in (rep.get("merchants") or []) if r.get("payTo") == pay_to), None)
+    grade = (row or {}).get("grade") or "?"
+    score = (row or {}).get("score")
+    colors = {"A": "#2da44e", "B": "#8fb339", "C": "#d4a72c", "D": "#d9730d", "E": "#cf3f28", "F": "#c0241d"}
+    color = colors.get(grade, "#8b949e")
+    label = "provenance"
+    value = ("grade %s" % grade + (" - %s" % score if score is not None else "")) if row else "unrated"
+    lw = 7 * len(label) + 12; vw = 7 * len(value) + 12
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="20" role="img" aria-label="%s: %s">'
+        '<title>Provenance wash-risk grade - blocksigner.org/provenance</title>'
+        '<rect width="%d" height="20" rx="3" fill="#30363d"/>'
+        '<rect x="%d" width="%d" height="20" fill="%s"/>'
+        '<rect x="%d" width="%d" height="20" rx="3" fill="%s" fill-opacity="0"/>'
+        '<g fill="#fff" font-family="Verdana,Geneva,sans-serif" font-size="11">'
+        '<text x="%d" y="14" text-anchor="middle">%s</text>'
+        '<text x="%d" y="14" text-anchor="middle">%s</text></g></svg>'
+    ) % (lw + vw, label, value, lw + vw, lw, vw, color, lw, vw, color,
+         lw // 2, label, lw + vw // 2, value)
+    resp = Response(svg, mimetype="image/svg+xml")
+    resp.headers["Cache-Control"] = "public, max-age=10800"
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
 
 @app.route("/provenance")
 @app.route("/provenance/")
@@ -3366,7 +3507,8 @@ def provenance_page():
     summary = {"service": "Provenance - Algorand x402 Challenge wash report (free summary)",
                "as_of": rep.get("as_of"), "scope": rep.get("scope"), "headline": h,
                "this_operator": {**(rep.get("this_operator") or {}), "grade": me.get("grade"), "score": me.get("score")},
-               "paid_detail": {p: PUBLIC_BASE + p for p in ("/commission/washreport", "/commission/washcheck", "/commission/washclusters")},
+               "paid_detail": {p: PUBLIC_BASE + p for p in ("/commission/washreport", "/commission/washcheck", "/commission/washclusters", "/commission/dataset")},
+               "badge": PUBLIC_BASE + "/provenance/badge/<payTo>.svg",
                "methodology": _wj.METHODOLOGY, "limitations": rep.get("limitations"), "publisher": "Apeiron Capital Inc."}
     accept = request.headers.get("Accept") or ""
     if request.args.get("format") == "json" or ("text/html" not in accept):
@@ -3458,7 +3600,7 @@ def free_taste():
                                                "tip": "You sent no parameters, so sensible defaults were used. Full parameter list: "
                                                       + PUBLIC_BASE + "/openapi.json"}},
         "product_lines": {v["label"]: v["routes"] for v in PRODUCT_LINES.values()},
-        "cheapest_daily_habit": PUBLIC_BASE + "/commission/dispatch",
+        "cheapest_daily_habit": PUBLIC_BASE + "/commission/tick",
         "how_to_pay": PUBLIC_BASE + "/x402.json",
         "as_of": now_iso(),
     }
