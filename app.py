@@ -86,7 +86,7 @@ VISIT_PRICE = os.getenv("VISIT_PRICE", "$0.02")
 ROUTE_PRICES = {"/commission/ask": None, "/commission/visit": None, "/commission/scout": None}
 DISPATCH_PRICE = os.getenv("DISPATCH_PRICE", "$0.01")
 PULSE_PRICE = "$0.01"
-TICK_PRICE = os.getenv("TICK_PRICE", "$0.001")
+TICK_PRICE = os.getenv("TICK_PRICE", "$0.005")
 DATASET_PRICE = os.getenv("DATASET_PRICE", "$0.50")
 WASH_PRICES = {"washreport": os.getenv("WASHREPORT_PRICE", "$0.02"), "washcheck": os.getenv("WASHCHECK_PRICE", "$0.005"),
                "washclusters": os.getenv("WASHCLUSTERS_PRICE", "$0.05"), "washaudit": os.getenv("WASHAUDIT_PRICE", "$5.00")}
@@ -1059,7 +1059,7 @@ routes["GET /commission/tick"] = paid_route(
     "tick",
     "You get: the smallest live snapshot of the Agent World - current Algorand round, the world headline, the six "
     "agents' total ALGO and the treasury balance, in one tiny JSON. First call free: add ?trial=1. "
-    "WORLD TICK - the cheapest heartbeat on the board: poll it to know the world is alive before buying anything "
+    "WORLD TICK - a low-cost heartbeat: poll it to know the world is alive before buying anything "
     "bigger. No parameters; fresh every couple of minutes, cached for speed.",
     {},
     {"properties": {}},
@@ -1744,7 +1744,7 @@ TREASURY_RULE = {
     "explorer": "https://allo.info/account/" + TREASURY_ADDR,
 }
 PRODUCT_LINES = {
-    "agent_world": {"label": "Agent World (12)", "what": "hire the six living agents - $0.001 to $0.05",
+    "agent_world": {"label": "Agent World (12)", "what": "hire the six living agents - $0.005 to $0.05",
                     "routes": ["/commission/sol", "/commission/mara", "/commission/tovi", "/commission/ask",
                                "/commission/visit", "/commission/episode", "/commission/scout", "/commission/pulse",
                                "/commission/duel", "/commission/signals", "/commission/dispatch", "/commission/tick"]},
@@ -1805,7 +1805,7 @@ def service_info():
             "/commission/washclusters": f"PROVENANCE CLUSTER GRAPH - shared funders and roaming payers across challenge merchants ({WASH_PRICES['washclusters']}; no params).",
             "/commission/washaudit": f"PROVENANCE MERCHANT AUDIT - every payer wallet of one merchant traced to its funders and classed (merchant-funded, linked, self, independent, light), with volume share per class and per-payer evidence ({WASH_PRICES['washaudit']}; ?payTo=<58-char merchant address> is REQUIRED - the one route with no default; a call without it gets a 400 before payment and is never charged; not charged either if the payTo received no USDC in 30 days).",
             "/commission/dispatch": f"DAILY DISPATCH - headline, every agent's state + balance, Tovi's ALGO call, treasury, square + key events, an on-chain fact, in ONE bundle ({DISPATCH_PRICE}; no params; new edition every 10 min - built for scheduled agents).",
-            "/commission/tick": f"WORLD TICK - the smallest live snapshot: Algorand round, world headline, agent + treasury balances ({TICK_PRICE}; no params; the cheapest route on the board - poll it before buying bigger).",
+            "/commission/tick": f"WORLD TICK - the smallest live snapshot: Algorand round, world headline, agent + treasury balances ({TICK_PRICE}; no params; a low-cost heartbeat - poll it before buying bigger).",
             "/commission/dataset": f"PROVENANCE DATASET - the full research bundle: every graded merchant, the cluster graph, payer-class integrity aggregates and the methodology, in one call ({DATASET_PRICE}; no params; attribution to blocksigner.org/provenance requested).",
         },
         "product_lines": PRODUCT_LINES,
@@ -2578,7 +2578,7 @@ def openapi_spec():
                 "Headline, every agent's state + balance, Tovi's ALGO call, treasury, square, key "
                 "events and an on-chain fact. No parameters; new edition every 10 min.", [], DISPATCH_PRICE)},
             "/commission/tick": {"get": op("World tick - smallest live snapshot",
-                "Current Algorand round, world headline, agent and treasury balances; the cheapest route on the menu. "
+                "Current Algorand round, world headline, agent and treasury balances; a low-cost heartbeat. "
                 "No parameters.", [], TICK_PRICE)},
             "/commission/dataset": {"get": op("Provenance dataset - full research bundle",
                 "Every graded challenge merchant, the cluster graph, payer-class integrity aggregates and the "
