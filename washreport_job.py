@@ -230,8 +230,12 @@ def main():
                      "reading": "volume-weighted share of claimed challenge volume that the wash-risk model does not attribute to independent multi-party demand"},
         "merchants": sorted(rows, key=lambda r: (r.get("rank") is None, r.get("rank") or 0)),
         "this_operator": {"payTo": OUR_PAYTO, "grade": ours and ours.get("grade"), "score": ours and ours.get("score"),
-                          "statement": "We grade our own entry with the same code. Almost all of our settlements to date are our own end-to-end tests from wallets we control, "
-                                       "which we declare here; the model is expected to flag that, and this entry doubles as a known-answer check on the scoring."},
+                          "statement": "We grade our own entry with the same code. Many of our settlements are our own payments from the operator wallets listed in declared_wallets: "
+                                       "end-to-end tests, and settles made to list routes in the Bazaar or refresh their listing. The challenge leaderboard counts them in our volume; our own pages "
+                                       "never count them as sales (live split: https://blocksigner.org/revshare). The model is expected to flag them, so this entry doubles as a "
+                                       "known-answer check on the scoring.",
+                          "declared_wallets": [{"address": a, "role": r} for a, r in SELF_DECLARED.items()],
+                          "live_split": "https://blocksigner.org/revshare"},
         "clusters": {"roaming_payers": [{"payer": p, "merchants_paid": len(ms), "merchants": sorted(filter(None, (merch.get(m) for m in ms)))[:12], "self_declared": SELF_DECLARED.get(p)} for p, ms in roaming[:40]],
                      "shared_funders": [{"funder": f, "funds_payers": len(ps), "funder_is_merchant": merch.get(f), "payers": sorted(ps)[:12]} for f, ps in rings[:40]]},
         "method": {"version": "0.1.0", "url": METHODOLOGY, "weights": {"few_payers": 45, "self_dealing": 25, "concentration": 20, "rekey_sybil": 20, "fresh_wallets": 15, "metronomic": 15, "single_funder": 15},

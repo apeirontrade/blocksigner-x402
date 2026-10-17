@@ -48,7 +48,11 @@ def main():
                     "Up to 40 payers per merchant and 1,000 recent transfers per address are traced; very large merchants are sampled.",
                     "The window counts USDC transfers into a payTo, not only facilitator-settled x402 payments."],
         "this_operator": {"payTo": A.AVM_ADDRESS, "grade": next((r.get("grade") for r in merchants if r.get("payTo") == A.AVM_ADDRESS), None),
-                          "statement": "Almost all of Agent World's settlements are our own end-to-end tests from wallets we control, which we declare. We grade ourselves with the same code and publish it as a known-answer check."},
+                          "statement": "Many of Agent World's settlements are our own payments from the operator wallets listed in declared_wallets: end-to-end tests, and settles made to list "
+                                       "routes in the Bazaar or refresh their listing. The challenge leaderboard counts them in our volume; our own pages never count them as sales "
+                                       "(live split: https://blocksigner.org/revshare). We grade ourselves with the same code and publish it as a known-answer check.",
+                          "declared_wallets": [{"address": a, "role": r} for a, r in A._wj.SELF_DECLARED.items()],
+                          "live_split": "https://blocksigner.org/revshare"},
         "per_merchant_grades": A.PUBLIC_BASE + "/commission/washreport",
         "check_one": A.PUBLIC_BASE + "/commission/washcheck?payTo=<address>&trial=1",
         "audit_one": A.PUBLIC_BASE + "/commission/washaudit?payTo=<address>",
